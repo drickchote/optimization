@@ -1,6 +1,7 @@
 #include <iostream>
 #include <list>
 #include <tuple>
+#include <random>
 
 using namespace std;
 
@@ -13,22 +14,61 @@ static constexpr double UB = 1.0; //
 static constexpr double K = 10; // max picked assets 
 
 
+mt19937 rng(42);
 
-// max return
-// min risk
 
 struct Individual{
-    vector<bool> picked; // list of assets weights
+    vector<int> picked; // list of assets weights
     vector<double> weights; // list of assets weights
     double expectedReturn; // maximize 
     double risk; // minimize
     int rank;
     int dominatedCount;
     vector<Individual> dominates;
+    double crowdingDistance = 0.0;
 };
 
-vector<double> generateDecision(int size){
+Individual generate_decision(int size, mt19937& rng) {
+    Individual individual;
 
+
+    uniform_int_distribution<int> binaryDist(0, 1);
+    uniform_real_distribution<double> realDist(0.0, 1.0);
+
+    individual.picked.resize(size);
+    individual.weights.resize(size, 0.0);
+
+    int pickedCount = 0;
+    for (int i = 0; i < size; ++i) {
+        individual.picked[i] = binaryDist(rng);
+        if (individual.picked[i] == 1)
+            pickedCount++;
+    }
+
+    // at least one should be selected
+    if (pickedCount == 0) {
+        int idx = uniform_int_distribution<int>(0, size - 1)(rng);
+        individual.picked[idx] = 1;
+        pickedCount = 1;
+    }
+
+    // Generate weights for the selected assets
+    double sumWeights = 0.0;
+    for (int i = 0; i < size; ++i) {
+        if (individual.picked[i] == 1) {
+            individual.weights[i] = realDist(rng);
+            sumWeights += individual.weights[i];
+        }
+    }
+
+    // normalization
+    for (int i = 0; i < size; ++i) {
+        if (individual.picked[i] == 1) {
+            individual.weights[i] /= sumWeights;
+        }
+    }
+
+    return individual;
 }
 
 vector<Individual> generate_population(int size){ // generates a random population
@@ -36,7 +76,7 @@ vector<Individual> generate_population(int size){ // generates a random populati
     population.reserve(POP_SIZE);
 
     for(int i=0; i<size; i++){
-        Individual individual = Individual();
+        Individual individual = generate_decision(NUMBER_OF_ASSETS, rng);
         
     }
 }
@@ -44,6 +84,12 @@ vector<Individual> generate_population(int size){ // generates a random populati
 vector<Individual> generate_population(vector<Individual> population){ // generates a population with genetic operations
 
 }
+
+vector<Individual> crossover(Individual individual1, Individual individual2){
+    
+}
+
+
 
 
 bool dominates(const Individual& individual1, const Individual& individual2){
@@ -77,9 +123,40 @@ void sort(vector<Individual> &population){ // sort by crowding distance
 /**
  * Do operations to ensure the constraints
  */
-void repairPopulation(vector<Individual> &population){ 
+void repair_population(vector<Individual> &population){ 
 
 }
+
+static inline int randi(mt19937& rng, int lo, int hi_inclusive) {
+    uniform_int_distribution<int> d(lo, hi_inclusive);
+    return d(rng);
+}
+
+static inline double rand01(mt19937& rng) {
+    uniform_real_distribution<double> d(0.0, 1.0);
+    return d(rng);
+}
+
+static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) {
+    const int n = (int)pop.size();
+    int a = randi(rng, 0, n - 1);
+    int b = randi(rng, 0, n - 1);
+    while (b == a && n > 1) b = randi(rng, 0, n - 1);
+
+    const Individual& A = pop[a];
+    const Individual& B = pop[b];
+
+    if (A.rank < B.rank) return a;
+    if (B.rank < A.rank) return b;
+
+    // higher crowding better
+    if (A.crowdingDistance > B.crowdingDistance) return a;
+    if (B.crowdingDistance > A.crowdingDistance) return b;
+
+    // tie-break random
+    return (rand01(rng) < 0.5) ? a : b;
+}
+
 
 
 
@@ -91,6 +168,7 @@ int main(){
     
     vector<Individual> nextGeneration;
     nextGeneration.reserve(population.size());
+    
     
     for(int i=0; i<GENERATIONS; i++){
         vector<vector<Individual>> frontiers = non_dominant_sort(population); 
@@ -105,7 +183,7 @@ int main(){
         nextGeneration.insert(nextGeneration.begin(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
 
         vector<Individual> offspring = generate_population(nextGeneration);
-        repairPopulation(offspring);
+        repair_population(offspring);
 
         // concatenation of nextGeneration + offspring
         population.clear();
