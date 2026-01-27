@@ -11,15 +11,13 @@ static int DEBUG = 1;
 
 static constexpr int POP_SIZE = 500;
 static constexpr int GENERATIONS = 200;
-static constexpr int NUMBER_OF_ASSETS = 31; // get from the file portx.txt
 static constexpr double LB = 0.01; //
 static constexpr double UB = 1.0; // 
 static constexpr double K = 10; // max picked assets 
-
+int NUMBER_OF_ASSETS = 0; // get from the file portx.txt
 
 
 mt19937 rng(42);
-
 
 struct Individual{
     vector<int> picked; // list of assets weights
@@ -87,7 +85,6 @@ void print_frontiers(Frontiers frontiers, Population population){
 void print_pareto(Frontiers frontiers, Population population){
     int frontierNumber = 1;
     auto frontier = frontiers[0];
-    cout << "Pareto Frontier with size =  " << frontier.size() << endl;
     frontierNumber++;
     for(auto individual : frontier){
         print_individual(individual);
@@ -486,12 +483,112 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
 }
 
 /**
- * Do operations to ensure the constraints
+ * Repair only for CARDINALITY constraint (Streichert et al.):
+ *  - Keep only the K largest weights among selected assets
+ *  - Set the rest to picked=0 and weight=0
+ *  - Normalize remaining picked weights to sum to 1
+ *  - Ensure at least one asset is selected
+ *
+ * This version is Lamarckian (it changes genotype: picked + weights).
  */
-void repair_population(vector<Individual> &population){ 
+void repair_population(vector<Individual> &population) {
 
+    auto ensure_at_least_one_picked = [&](Individual& ind) {
+        int pickedCount = 0;
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0);
+        if (pickedCount > 0) return;
+
+        // pick the max-weight gene (or random) and force it
+        int best = 0;
+        double bestW = -1.0;
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.weights[i] > bestW) { bestW = ind.weights[i]; best = i; }
+        }
+        ind.picked[best] = 1;
+        ind.weights[best] = 1.0;
+    };
+
+    auto normalize = [&](Individual& ind) {
+        double sum = 0.0;
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 0) continue;
+            // optional bounds; keep consistent with "no short sales"
+            ind.weights[i] = clamp01(ind.weights[i]);
+            sum += ind.weights[i];
+        }
+
+        if (nearly_equal(sum, 0.0)) {
+            // fallback: all mass on first picked asset
+            int idx = -1;
+            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+                if (ind.picked[i]) { idx = i; break; }
+            }
+            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) ind.weights[i] = 0.0;
+            if (idx >= 0) ind.weights[idx] = 1.0;
+            return;
+        }
+
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 1) ind.weights[i] /= sum;
+        }
+    };
+
+    auto apply_cardinality_keep_k_largest = [&](Individual& ind) {
+        // First enforce consistency: if not picked -> weight 0; if picked -> clamp to [0,1]
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            ind.picked[i] = (ind.picked[i] != 0) ? 1 : 0;
+            if (ind.picked[i] == 0) ind.weights[i] = 0.0;
+            else ind.weights[i] = clamp01(ind.weights[i]);
+        }
+
+        // Collect indices of picked assets
+        vector<int> idx;
+        idx.reserve(NUMBER_OF_ASSETS);
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 1) idx.push_back(i);
+        }
+
+        if ((int)idx.size() <= (int)K) return;
+
+        // Keep only top-K by weight among picked
+        std::nth_element(
+            idx.begin(),
+            idx.begin() + (int)K,
+            idx.end(),
+            [&](int a, int b) { return ind.weights[a] > ind.weights[b]; }
+        );
+
+        vector<char> keep(NUMBER_OF_ASSETS, 0);
+        for (int t = 0; t < (int)K; ++t) keep[idx[t]] = 1;
+
+        // Zero out everything not kept
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 1 && !keep[i]) {
+                ind.picked[i] = 0;
+                ind.weights[i] = 0.0;
+            }
+        }
+    };
+
+    for (auto& ind : population) {
+        // 1) ensure at least one selected
+        ensure_at_least_one_picked(ind);
+
+        // 2) cardinality repair (keep only K largest)
+        apply_cardinality_keep_k_largest(ind);
+
+        // 3) ensure at least one again (just in case)
+        ensure_at_least_one_picked(ind);
+
+        // 4) normalize to sum 1
+        normalize(ind);
+
+        // 5) final consistency
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (!ind.picked[i]) ind.weights[i] = 0.0;
+        }
+    }
 }
-
 
 
 
@@ -575,6 +672,7 @@ void calculate_crowding_distance(Frontiers& frontiers) {
 
 int main(){
     PortfolioData data = PortfolioDataLoader::load_from_file("port1.txt");
+    NUMBER_OF_ASSETS = data.mean.size();
 
     Population population = generate_population(POP_SIZE, data);
     population.reserve(POP_SIZE * 2);
@@ -611,10 +709,11 @@ int main(){
     }
 
       if(DEBUG){
+        print_pareto(frontiers, population);
         cout << "Loaded " << data.mean.size() << " assets" << endl;
         cout << "Generate " << population.size() << " individuals" << endl;
         cout << "frontiers number " << frontiers.size() << endl;
-        print_pareto(frontiers, population);
+        cout << "Pareto frontier size: " << frontiers[0].size() << endl;
     }
    
 }
