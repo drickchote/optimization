@@ -20,6 +20,27 @@ static inline bool nearly_equal(double a, double b, double eps = 1e-12) {
     return fabs(a - b) <= eps;
 }
 
+bool dominates(const Individual& a, const Individual& b){
+    const bool betterReturn =
+        (a.expectedReturn > b.expectedReturn) &&
+        !nearly_equal(a.expectedReturn, b.expectedReturn);
+
+    const bool betterRisk =
+        (a.risk < b.risk) &&
+        !nearly_equal(a.risk, b.risk);
+
+    const bool noWorseReturn =
+        (a.expectedReturn > b.expectedReturn) ||
+        nearly_equal(a.expectedReturn, b.expectedReturn);
+
+    const bool noWorseRisk =
+        (a.risk < b.risk) ||
+        nearly_equal(a.risk, b.risk);
+
+    return (betterReturn && noWorseRisk)
+        || (betterRisk && noWorseReturn);
+}
+
 static inline double compute_expected_return_from_w(const vector<double>& w, const PortfolioData& data) {
     double er = 0.0;
     for (int i = 0; i < data.n; ++i) er += w[i] * data.mean[i];
