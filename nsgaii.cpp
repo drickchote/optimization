@@ -6,11 +6,11 @@
 
 using namespace std;
 
-static int DEBUG = 0;
+static int DEBUG = 1;
 
 
-static constexpr int POP_SIZE = 40;
-static constexpr int GENERATIONS = 1;
+static constexpr int POP_SIZE = 500;
+static constexpr int GENERATIONS = 200;
 static constexpr int NUMBER_OF_ASSETS = 31; // get from the file portx.txt
 static constexpr double LB = 0.01; //
 static constexpr double UB = 1.0; // 
@@ -45,6 +45,12 @@ static inline double rand01(mt19937& rng) {
     return d(rng);
 }
 
+static inline double clamp01(double x) {
+    if (x < 0.0) return 0.0;
+    if (x > 1.0) return 1.0;
+    return x;
+}
+
 void print_individual(Individual individual){
     cout << "______________" << endl;
     for(int i=0; i<NUMBER_OF_ASSETS; i++){
@@ -76,6 +82,17 @@ void print_frontiers(Frontiers frontiers, Population population){
         }
         cout << "------------" << endl;
     }
+}
+
+void print_pareto(Frontiers frontiers, Population population){
+    int frontierNumber = 1;
+    auto frontier = frontiers[0];
+    cout << "Pareto Frontier with size =  " << frontier.size() << endl;
+    frontierNumber++;
+    for(auto individual : frontier){
+        print_individual(individual);
+    }
+    cout << "------------" << endl;
 }
 
 double calculate_expected_return(const Individual& ind, const PortfolioData& data) {
@@ -179,10 +196,28 @@ Population generate_population(int size, PortfolioData data){ // generates a ran
     return population;
 }
 
-Population generate_population(Population population){ // generates a population with genetic operations
+static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) {
+    const int n = (int)pop.size();
+    int a = randi(rng, 0, n - 1);
+    int b = randi(rng, 0, n - 1);
+    while (b == a && n > 1) b = randi(rng, 0, n - 1);
 
+    const Individual& A = pop[a];
+    const Individual& B = pop[b];
+
+    if (A.rank < B.rank) return a;
+    if (B.rank < A.rank) return b;
+
+    // higher crowding better
+    if (A.crowdingDistance > B.crowdingDistance) return a;
+    if (B.crowdingDistance > A.crowdingDistance) return b;
+
+    // tie-break random
+    return (rand01(rng) < 0.5) ? a : b;
 }
 
+/** Crossover operation based on (streichert, 2004b) */
+/** TODO: Try other crossover operations? */
 Population crossover(Individual individual1, Individual individual2) {
     Population children;
     children.reserve(2);
@@ -279,6 +314,59 @@ Population crossover(Individual individual1, Individual individual2) {
     children.push_back(move(child2));
     return children;
 }
+
+/** Mutation based on (streichert, 2004b)  */
+/** TODO: review sigma value*/
+void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, double sigma = 0.05) {
+    // --- Bit-string one-point mutation (flip 1 gene) ---
+    if (!individual.picked.empty() && rand01(rng) <= pm_bits) {
+        int idx = randi(rng, 0, (int)individual.picked.size() - 1);
+
+        // picked should be 0/1
+        individual.picked[idx] = (individual.picked[idx] == 0) ? 1 : 0;
+    }
+
+    // --- Real-valued gaussian mutation ---
+    // pm_real = 1.0 in the paper => always mutates (so this "if" always passes)
+    if (!individual.weights.empty() && rand01(rng) <= pm_real) {
+        std::normal_distribution<double> gauss(0.0, sigma);
+
+        for (double& w : individual.weights) {
+            w = clamp01(w + gauss(rng)); // keep genotype bounded (repair/normalization is separate)
+        }
+    }
+}
+
+Population generate_population(Population population, PortfolioData data){ // generates a population with genetic operations
+    Population offspring;
+    offspring.reserve(POP_SIZE);
+
+    while ((int)offspring.size() < POP_SIZE) {
+        int p1 = tournament_select_index(population, rng);
+        int p2 = tournament_select_index(population, rng);
+        while (p2 == p1 && (int)population.size() > 1) {
+            p2 = tournament_select_index(population, rng);
+        }
+
+        Population children = crossover(population[p1], population[p2]);
+
+        for (auto& child : children) {
+            // mutation + repair/normalize
+            mutate(child);
+
+            // avaliar
+            child.expectedReturn = calculate_expected_return(child, data);
+            child.risk = calculate_risk(child, data);
+
+            offspring.push_back(std::move(child));
+            if ((int)offspring.size() >= POP_SIZE) break;
+        }
+    }
+
+    return offspring;
+}
+
+
 
 
 
@@ -377,7 +465,6 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
     sort(population.begin(), population.end(),
         [](const Individual& a, const Individual& b){
             // 1) Dominations has priority
-
             if (a.rank < b.rank) return true;   // a comes before b
             if (b.rank < a.rank) return false;  // b comes before a
 
@@ -405,27 +492,6 @@ void repair_population(vector<Individual> &population){
 
 }
 
-
-
-static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) {
-    const int n = (int)pop.size();
-    int a = randi(rng, 0, n - 1);
-    int b = randi(rng, 0, n - 1);
-    while (b == a && n > 1) b = randi(rng, 0, n - 1);
-
-    const Individual& A = pop[a];
-    const Individual& B = pop[b];
-
-    if (A.rank < B.rank) return a;
-    if (B.rank < A.rank) return b;
-
-    // higher crowding better
-    if (A.crowdingDistance > B.crowdingDistance) return a;
-    if (B.crowdingDistance > A.crowdingDistance) return b;
-
-    // tie-break random
-    return (rand01(rng) < 0.5) ? a : b;
-}
 
 
 
@@ -518,16 +584,11 @@ int main(){
 
     Population nextGeneration;
     nextGeneration.reserve(population.size());
-
-    //  if(DEBUG){
-    //     cout << "Loaded " << data.mean.size() << " assets" << endl;
-    //     cout << "Generate " << population.size() << " individuals" << endl;
-    //     cout << "frontiers number " << frontiers.size() << endl;
-    //     print_frontiers(frontiers, population);
-    // }
+    
+    Frontiers frontiers;
 
     for(int i=0; i<GENERATIONS; i++){
-        Frontiers frontiers = non_dominant_sort(population); 
+        frontiers = non_dominant_sort(population); 
 
         calculate_crowding_distance(frontiers);
 
@@ -540,13 +601,20 @@ int main(){
         int remainingSpace =  POP_SIZE-nextGeneration.size();
         nextGeneration.insert(nextGeneration.begin(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
 
-        // Population offspring = generate_population(nextGeneration);
+        Population offspring = generate_population(nextGeneration, data);
         // repair_population(offspring);
 
         // concatenation of nextGeneration + offspring
-        // population.clear();
-        // population.insert(population.end(), nextGeneration.begin(), nextGeneration.end());
-        // population.insert(population.end(), offspring.begin(), offspring.end());
+        population.clear();
+        population.insert(population.end(), nextGeneration.begin(), nextGeneration.end());
+        population.insert(population.end(), offspring.begin(), offspring.end());
+    }
+
+      if(DEBUG){
+        cout << "Loaded " << data.mean.size() << " assets" << endl;
+        cout << "Generate " << population.size() << " individuals" << endl;
+        cout << "frontiers number " << frontiers.size() << endl;
+        print_pareto(frontiers, population);
     }
    
 }
