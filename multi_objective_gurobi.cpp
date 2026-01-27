@@ -138,7 +138,7 @@ static inline bool same_solution_weights(const Individual& a, const Individual& 
 
 vector<Individual> non_dominated_points(
     const PortfolioData& data,
-    int K_maxPicked,
+    int K,
     double deltaReturn = 1e-4,
     int maxPoints = 10000,
     int verbose = 0
@@ -172,7 +172,7 @@ vector<Individual> non_dominated_points(
         {
             GRBLinExpr sumY = 0.0;
             for (int i = 0; i < N; ++i) sumY += y[i];
-            model.addConstr(sumY <= (double)K_maxPicked, "cardinality");
+            model.addConstr(sumY <= (double)K, "cardinality");
         }
 
         // linking: w_i <= y_i
