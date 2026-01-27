@@ -229,13 +229,14 @@ vector<Individual> non_dominated_points(
             const double bestVar = varianceExpr.getValue();
             Individual ind = extract_individual_solution(y, w, data);
 
-            // Duplicate by objectives (more stable than weight-vector equality)
+             const double newUB = ind.expectedReturn - deltaReturn; // use saved return
+
             if (!pareto.empty()) {
                 const auto& prev = pareto.back();
                 if (std::fabs(ind.expectedReturn - prev.expectedReturn) <= tolDupObj &&
                     std::fabs(ind.risk*ind.risk - prev.risk*prev.risk) <= tolDupObj) {
                     if (verbose) std::cerr << "Duplicate (obj space). Increase deltaReturn.\n";
-                    break;
+                    continue;
                 }
             }
 
@@ -251,7 +252,7 @@ vector<Individual> non_dominated_points(
             }
 
             // Cut return for next iteration:
-            const double newUB = ind.expectedReturn - deltaReturn; // use saved return
+           
             if (newUB <= 0.0) break;
 
             if (hasRetUBConstr) {
