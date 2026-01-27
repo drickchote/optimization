@@ -41,6 +41,32 @@ bool dominates(const Individual& a, const Individual& b){
         || (betterRisk && noWorseReturn);
 }
 
+
+static inline void pareto_insert(std::vector<Individual>& pareto,
+                                const Individual& cand,
+                                double eps = 1e-12)
+{
+    // 1) If any existing point dominates cand, discard cand
+    for (const auto& p : pareto) {
+        if (dominates(p, cand)) {
+            return;
+        }
+    }
+
+    // 2) Remove any points dominated by cand
+    pareto.erase(
+        std::remove_if(pareto.begin(), pareto.end(),
+                       [&](const Individual& p) {
+                           return dominates(cand, p);
+                       }),
+        pareto.end()
+    );
+
+    // 3) Insert cand
+    pareto.push_back(cand);
+}
+
+
 static inline double compute_expected_return_from_w(const vector<double>& w, const PortfolioData& data) {
     double er = 0.0;
     for (int i = 0; i < data.n; ++i) er += w[i] * data.mean[i];
@@ -213,7 +239,7 @@ vector<Individual> non_dominated_points(
                 }
             }
 
-            pareto.push_back(ind);
+            pareto_insert(pareto, ind);
 
             if (verbose) {
                 std::cout << "Point #" << pareto.size()
