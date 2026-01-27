@@ -97,8 +97,7 @@ double calculate_expected_return(const Individual& ind, const PortfolioData& dat
     double er = 0.0;
 
     for (int i = 0; i < N; ++i) {
-        if (ind.picked[i] == 0) continue;
-        er += ind.weights[i] * data.mean[i];
+        er += ind.picked[i] * ind.weights[i] * data.mean[i];
     }
 
     return er;
@@ -148,7 +147,8 @@ Individual generate_decision(int size, mt19937& rng) {
             pickedCount++;
     }
 
-    // At least one should be selected
+    // TODO: check the possibility of move this to the repair function
+    // At least one should be selected 
     if (pickedCount == 0) {
         int idx = uniform_int_distribution<int>(0, size - 1)(rng);
         individual.picked[idx] = 1;
@@ -164,6 +164,7 @@ Individual generate_decision(int size, mt19937& rng) {
         }
     }
 
+    // TODO: check the possibility of move this to the repair function
     // normalization
     for (int i = 0; i < size; ++i) {
         if (individual.picked[i] == 1) {
@@ -671,7 +672,7 @@ void calculate_crowding_distance(Frontiers& frontiers) {
 
 
 int main(){
-    PortfolioData data = PortfolioDataLoader::load_from_file("port1.txt");
+    PortfolioData data = PortfolioDataLoader::load_from_file("port4.txt");
     NUMBER_OF_ASSETS = data.mean.size();
 
     Population population = generate_population(POP_SIZE, data);
@@ -700,7 +701,7 @@ int main(){
         nextGeneration.insert(nextGeneration.begin(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
 
         Population offspring = generate_population(nextGeneration, data);
-        // repair_population(offspring);
+        repair_population(offspring);
 
         // concatenation of nextGeneration + offspring
         population.clear();
