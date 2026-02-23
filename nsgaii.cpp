@@ -3,35 +3,29 @@
 #include <tuple>
 #include <random>
 #include "portfolio_data.hpp"
+#include "nsgaii.hpp"
+#include <vector>
 
 using namespace std;
 
 static int DEBUG = 1;
 
 
-static constexpr int POP_SIZE = 500;
-static constexpr int GENERATIONS = 200;
+static constexpr int POP_SIZE = 1000;
+static constexpr int GENERATIONS = 500;
 static constexpr double LB = 0.01; //
 static constexpr double UB = 1.0; // 
 static constexpr double K = 10; // max picked assets 
-int NUMBER_OF_ASSETS = 0; // get from the file portx.txt
+int NUMBER_OF_ASSETS = 0;
 
 
 mt19937 rng(42);
 
-struct Individual{
-    vector<int> picked; // list of assets weights
-    vector<double> weights; // list of assets weights
-    double expectedReturn; // maximize 
-    double risk; // minimize
-    int rank;
-    int dominatedCount = 0;
-    vector<int> dominates;
-    double crowdingDistance = 0.0;
-};
+using Population = NSGAII_Population;
+using Frontiers = NSGAII_Frontiers; 
+using Individual = NSGAII_Individual;
+using Archive = vector<Individual>;
 
-using Population = vector<Individual>;
-using Frontiers = vector<vector<Individual>>; 
 
 static inline int randi(mt19937& rng, int lo, int hi_inclusive) {
     uniform_int_distribution<int> d(lo, hi_inclusive);
@@ -175,9 +169,7 @@ Individual generate_decision(int size, mt19937& rng) {
     return individual;
 }
 
-static inline bool nearly_equal(double a, double b, double eps = 1e-12) {
-    return fabs(a - b) <= eps;
-}
+
 
 
 Population generate_population(int size, PortfolioData data){ // generates a random population
@@ -327,7 +319,7 @@ void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, 
     // --- Real-valued gaussian mutation ---
     // pm_real = 1.0 in the paper => always mutates (so this "if" always passes)
     if (!individual.weights.empty() && rand01(rng) <= pm_real) {
-        std::normal_distribution<double> gauss(0.0, sigma);
+        normal_distribution<double> gauss(0.0, sigma);
 
         for (double& w : individual.weights) {
             w = clamp01(w + gauss(rng)); // keep genotype bounded (repair/normalization is separate)
@@ -356,7 +348,7 @@ Population generate_population(Population population, PortfolioData data){ // ge
             child.expectedReturn = calculate_expected_return(child, data);
             child.risk = calculate_risk(child, data);
 
-            offspring.push_back(std::move(child));
+            offspring.push_back(move(child));
             if ((int)offspring.size() >= POP_SIZE) break;
         }
     }
@@ -383,7 +375,7 @@ bool dominates(const Individual& a, const Individual& b){
 
     const bool noWorseRisk =
         (a.risk < b.risk) ||
-        nearly_equal(a.risk, b.expectedReturn);
+        nearly_equal(a.risk, b.risk);
 
     return (betterReturn && noWorseRisk)
         || (betterRisk && noWorseReturn);
@@ -552,7 +544,7 @@ void repair_population(vector<Individual> &population) {
         if ((int)idx.size() <= (int)K) return;
 
         // Keep only top-K by weight among picked
-        std::nth_element(
+        nth_element(
             idx.begin(),
             idx.begin() + (int)K,
             idx.end(),
@@ -670,9 +662,45 @@ void calculate_crowding_distance(Frontiers& frontiers) {
     }
 }
 
+bool is_dominated_by_archive(Archive& arquive, Individual individual){
+    for (auto ubIndividual : arquive){
+        if(dominates(ubIndividual, individual)){
+            return true;
+        }
+    }
+    return false;
+}
 
-int main(){
-    PortfolioData data = PortfolioDataLoader::load_from_file("port4.txt");
+
+void add_to_archive(Archive& arquive, Individual individual){
+    if(is_dominated_by_archive(arquive, individual)){
+        return;
+    }
+
+    for (auto it = arquive.begin(); it != arquive.end(); ) {
+        if (dominates(individual, *it)) {
+            it = arquive.erase(it);  
+        } else {
+            ++it;
+        }
+    }
+
+    arquive.push_back(individual);
+}
+
+void add_population_to_archive(Archive& arquive, Population& population){
+    for(auto individual : population){
+        add_to_archive(arquive, individual);
+    }
+}
+
+
+
+
+Population run_nsgaII(){
+    Archive archive = {};
+    PortfolioData data = PortfolioDataLoader::load_from_file("port3.txt");
+    portfolioData = data;
     NUMBER_OF_ASSETS = data.mean.size();
 
     Population population = generate_population(POP_SIZE, data);
@@ -687,7 +715,11 @@ int main(){
     Frontiers frontiers;
 
     for(int i=0; i<GENERATIONS; i++){
+        // Torneio binário: Selecionar 2 indivíduos, eles competem no primeiro objetivo: Eles competem no primeiro objetivo
+        // Seleciona 2 outros indivíduos e eles competem no segundo objetivo
         frontiers = non_dominant_sort(population); 
+        
+        add_population_to_archive(archive, frontiers[0]);
 
         calculate_crowding_distance(frontiers);
 
@@ -714,7 +746,12 @@ int main(){
         cout << "Loaded " << data.mean.size() << " assets" << endl;
         cout << "Generate " << population.size() << " individuals" << endl;
         cout << "frontiers number " << frontiers.size() << endl;
-        cout << "Pareto frontier size: " << frontiers[0].size() << endl;
+        cout << "last frontier execution size: " << frontiers[0].size() << endl;
+        cout << "Archive size: " << archive.size() << endl;
     }
-   
+    return archive;
+}
+
+int main(){
+    run_nsgaII();
 }
