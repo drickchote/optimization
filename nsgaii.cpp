@@ -11,8 +11,8 @@ using namespace std;
 static int DEBUG = 1;
 
 
-static constexpr int POP_SIZE = 1000;
-static constexpr int GENERATIONS = 500;
+static constexpr int POP_SIZE = 250;
+static constexpr int GENERATIONS = 400;
 static constexpr double LB = 0.01; //
 static constexpr double UB = 1.0; // 
 static constexpr double K = 10; // max picked assets 
@@ -699,8 +699,7 @@ void add_population_to_archive(Archive& arquive, Population& population){
 
 Population run_nsgaII(){
     Archive archive = {};
-    PortfolioData data = PortfolioDataLoader::load_from_file("port3.txt");
-    portfolioData = data;
+    PortfolioData data = PortfolioDataLoader::load_from_file("port1.txt");
     NUMBER_OF_ASSETS = data.mean.size();
 
     Population population = generate_population(POP_SIZE, data);
@@ -715,6 +714,8 @@ Population run_nsgaII(){
     Frontiers frontiers;
 
     for(int i=0; i<GENERATIONS; i++){
+        cout << "Generation " << i << endl;
+        nextGeneration.clear();
         // Torneio binário: Selecionar 2 indivíduos, eles competem no primeiro objetivo: Eles competem no primeiro objetivo
         // Seleciona 2 outros indivíduos e eles competem no segundo objetivo
         frontiers = non_dominant_sort(population); 
@@ -730,7 +731,7 @@ Population run_nsgaII(){
         }
         sort_population(frontiers[frontierIndex]);
         int remainingSpace =  POP_SIZE-nextGeneration.size();
-        nextGeneration.insert(nextGeneration.begin(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
+        nextGeneration.insert(nextGeneration.end(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
 
         Population offspring = generate_population(nextGeneration, data);
         repair_population(offspring);
@@ -753,5 +754,6 @@ Population run_nsgaII(){
 }
 
 int main(){
-    run_nsgaII();
+    Population archive = run_nsgaII();
+    write_efficient_frontier_chart(archive, "efficient_frontier.html");
 }
