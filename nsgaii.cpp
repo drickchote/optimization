@@ -2,14 +2,15 @@
 #include <list>
 #include <tuple>
 #include <random>
+#include <algorithm>
 #include "portfolio_data.hpp"
 #include "nsgaii.hpp"
 #include <vector>
+#include <iomanip>
 
 using namespace std;
 
-static int DEBUG = 1;
-
+static int OUTPUT = 1;
 
 static constexpr int POP_SIZE = 250;
 static constexpr int GENERATIONS = 400;
@@ -17,7 +18,6 @@ static constexpr double LB = 0.01; //
 static constexpr double UB = 1.0; // 
 static constexpr double K = 10; // max picked assets 
 int NUMBER_OF_ASSETS = 0;
-
 
 mt19937 rng(42);
 
@@ -44,6 +44,11 @@ static inline double clamp01(double x) {
 }
 
 void print_individual(Individual individual){
+    if(OUTPUT){
+        cout << setprecision(17) << individual.risk << " " << individual.expectedReturn << endl;
+        return;
+    }
+
     cout << "______________" << endl;
     for(int i=0; i<NUMBER_OF_ASSETS; i++){
         if(individual.picked[i]){
@@ -56,6 +61,7 @@ void print_individual(Individual individual){
     cout << "Risk: " << individual.risk << endl;
     cout << "______________" << endl;
 }
+
 
 void print_population(Population &population){
     for(auto i : population){
@@ -85,6 +91,7 @@ void print_pareto(Frontiers frontiers, Population population){
     }
     cout << "------------" << endl;
 }
+
 
 double calculate_expected_return(const Individual& ind, const PortfolioData& data) {
     const int N = data.n;
@@ -344,10 +351,6 @@ Population generate_population(Population population, PortfolioData data){ // ge
             // mutation + repair/normalize
             mutate(child);
 
-            // avaliar
-            child.expectedReturn = calculate_expected_return(child, data);
-            child.risk = calculate_risk(child, data);
-
             offspring.push_back(move(child));
             if ((int)offspring.size() >= POP_SIZE) break;
         }
@@ -355,9 +358,6 @@ Population generate_population(Population population, PortfolioData data){ // ge
 
     return offspring;
 }
-
-
-
 
 
 bool dominates(const Individual& a, const Individual& b){
@@ -662,9 +662,11 @@ void calculate_crowding_distance(Frontiers& frontiers) {
     }
 }
 
-bool is_dominated_by_archive(Archive& arquive, Individual individual){
-    for (auto ubIndividual : arquive){
-        if(dominates(ubIndividual, individual)){
+
+
+bool dominated_or_existing_solution(Archive& archive, const Individual& ind){
+    for (const auto& ub : archive){
+        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn) && nearly_equal(ub.risk, ind.risk))){
             return true;
         }
     }
@@ -672,56 +674,48 @@ bool is_dominated_by_archive(Archive& arquive, Individual individual){
 }
 
 
-void add_to_archive(Archive& arquive, Individual individual){
-    if(is_dominated_by_archive(arquive, individual)){
+void add_to_archive(Archive& archive, Individual& individual){
+    if(dominated_or_existing_solution(archive, individual)){
         return;
     }
 
-    for (auto it = arquive.begin(); it != arquive.end(); ) {
+    for (auto it = archive.begin(); it != archive.end(); ) {
         if (dominates(individual, *it)) {
-            it = arquive.erase(it);  
+            it = archive.erase(it);  
         } else {
             ++it;
         }
     }
-
-    arquive.push_back(individual);
+    archive.push_back(individual);
 }
 
-void add_population_to_archive(Archive& arquive, Population& population){
+void add_population_to_archive(Archive& archive, Population& population){
     for(auto individual : population){
-        add_to_archive(arquive, individual);
+        add_to_archive(archive, individual);
     }
 }
 
 
-
-
 Population run_nsgaII(){
     Archive archive = {};
-    PortfolioData data = PortfolioDataLoader::load_from_file("port1.txt");
+    archive.reserve(POP_SIZE * GENERATIONS);
+    PortfolioData data = PortfolioDataLoader::load_from_file("port5.txt"); 
     NUMBER_OF_ASSETS = data.mean.size();
-
+    portfolioData = data;
     Population population = generate_population(POP_SIZE, data);
-    population.reserve(POP_SIZE * 2);
-
-
-    int generation = 0;
-
-    Population nextGeneration;
-    nextGeneration.reserve(population.size());
     
-    Frontiers frontiers;
+    Frontiers frontiers = non_dominant_sort(population); 
+    
+    population.reserve(POP_SIZE * 2);
+    Population nextGeneration;
+    nextGeneration.reserve(POP_SIZE*2);
+   
 
     for(int i=0; i<GENERATIONS; i++){
-        cout << "Generation " << i << endl;
         nextGeneration.clear();
         // Torneio binário: Selecionar 2 indivíduos, eles competem no primeiro objetivo: Eles competem no primeiro objetivo
         // Seleciona 2 outros indivíduos e eles competem no segundo objetivo
-        frontiers = non_dominant_sort(population); 
         
-        add_population_to_archive(archive, frontiers[0]);
-
         calculate_crowding_distance(frontiers);
 
         int frontierIndex=0;
@@ -736,24 +730,28 @@ Population run_nsgaII(){
         Population offspring = generate_population(nextGeneration, data);
         repair_population(offspring);
 
+        for (auto& child : offspring) {
+            child.expectedReturn = calculate_expected_return(child, data);
+            child.risk = calculate_risk(child, data);
+        }
+
+        
         // concatenation of nextGeneration + offspring
         population.clear();
         population.insert(population.end(), nextGeneration.begin(), nextGeneration.end());
         population.insert(population.end(), offspring.begin(), offspring.end());
+
+        frontiers = non_dominant_sort(population); 
+        add_population_to_archive(archive, frontiers[0]);
     }
 
-      if(DEBUG){
-        print_pareto(frontiers, population);
-        cout << "Loaded " << data.mean.size() << " assets" << endl;
-        cout << "Generate " << population.size() << " individuals" << endl;
-        cout << "frontiers number " << frontiers.size() << endl;
-        cout << "last frontier execution size: " << frontiers[0].size() << endl;
-        cout << "Archive size: " << archive.size() << endl;
-    }
+    if (OUTPUT){
+        print_population(archive);
+    } 
     return archive;
 }
 
 int main(){
     Population archive = run_nsgaII();
-    write_efficient_frontier_chart(archive, "efficient_frontier.html");
+    return 0;
 }
