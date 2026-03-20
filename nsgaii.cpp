@@ -52,7 +52,9 @@ void print_individual(Individual individual){
     cout << "______________" << endl;
     for(int i=0; i<NUMBER_OF_ASSETS; i++){
         if(individual.picked[i]){
-            cout << i <<" - " << individual.weights[i] << " | ";
+            cout << 1;
+        } else {
+            cout << 0;
         }
     }
     cout << endl;
@@ -128,69 +130,6 @@ double calculate_risk(const Individual& ind, const PortfolioData& data) {
         variance = 0.0;
 
     return sqrt(variance);
-}
-
-
-Individual generate_decision(int size, mt19937& rng) {
-    Individual individual;
-
-
-    uniform_int_distribution<int> binaryDist(0, 1);
-    uniform_real_distribution<double> realDist(0.0, 1.0);
-
-    individual.picked.resize(size);
-    individual.weights.resize(size, 0.0);
-
-    int pickedCount = 0;
-    for (int i = 0; i < size; ++i) {
-        individual.picked[i] = binaryDist(rng);
-        if (individual.picked[i] == 1)
-            pickedCount++;
-    }
-
-    // TODO: check the possibility of move this to the repair function
-    // At least one should be selected 
-    if (pickedCount == 0) {
-        int idx = uniform_int_distribution<int>(0, size - 1)(rng);
-        individual.picked[idx] = 1;
-        pickedCount = 1;
-    }
-
-    // Generate weights for the selected assets
-    double sumWeights = 0.0;
-    for (int i = 0; i < size; ++i) {
-        if (individual.picked[i] == 1) {
-            individual.weights[i] = realDist(rng);
-            sumWeights += individual.weights[i];
-        }
-    }
-
-    // TODO: check the possibility of move this to the repair function
-    // normalization
-    for (int i = 0; i < size; ++i) {
-        if (individual.picked[i] == 1) {
-            individual.weights[i] /= sumWeights;
-        }
-    }
-
-    return individual;
-}
-
-
-
-
-Population generate_population(int size, PortfolioData data){ // generates a random population
-    Population population;
-    population.reserve(POP_SIZE);
-
-    for(int i=0; i<size; i++){
-        Individual individual = generate_decision(NUMBER_OF_ASSETS, rng);
-        individual.expectedReturn = calculate_expected_return(individual, data);
-        individual.risk = calculate_risk(individual, data);
-        population.push_back(individual);
-    }
-
-    return population;
 }
 
 static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) {
@@ -334,30 +273,7 @@ void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, 
     }
 }
 
-Population generate_population(Population population, PortfolioData data){ // generates a population with genetic operations
-    Population offspring;
-    offspring.reserve(POP_SIZE);
 
-    while ((int)offspring.size() < POP_SIZE) {
-        int p1 = tournament_select_index(population, rng);
-        int p2 = tournament_select_index(population, rng);
-        while (p2 == p1 && (int)population.size() > 1) {
-            p2 = tournament_select_index(population, rng);
-        }
-
-        Population children = crossover(population[p1], population[p2]);
-
-        for (auto& child : children) {
-            // mutation + repair/normalize
-            mutate(child);
-
-            offspring.push_back(move(child));
-            if ((int)offspring.size() >= POP_SIZE) break;
-        }
-    }
-
-    return offspring;
-}
 
 
 bool dominates(const Individual& a, const Individual& b){
@@ -402,6 +318,54 @@ void evaluate(Population& population){
         }
     }
 }
+
+Individual generate_decision(int size, mt19937& rng) {
+    Individual individual;
+
+
+    uniform_int_distribution<int> binaryDist(0, 1);
+    uniform_real_distribution<double> realDist(0.0, 1.0);
+
+    individual.picked.resize(size);
+    individual.weights.resize(size, 0.0);
+
+    int pickedCount = 0;
+    for (int i = 0; i < size; ++i) {
+        individual.picked[i] = binaryDist(rng);
+        if (individual.picked[i] == 1)
+            pickedCount++;
+    }
+
+    // TODO: check the possibility of move this to the repair function
+    // At least one should be selected 
+    if (pickedCount == 0) {
+        int idx = uniform_int_distribution<int>(0, size - 1)(rng);
+        individual.picked[idx] = 1;
+        pickedCount = 1;
+    }
+
+    // Generate weights for the selected assets
+    double sumWeights = 0.0;
+    for (int i = 0; i < size; ++i) {
+        if (individual.picked[i] == 1) {
+            individual.weights[i] = realDist(rng);
+            sumWeights += individual.weights[i];
+        }
+    }
+
+    // TODO: check the possibility of move this to the repair function
+    // normalization
+    for (int i = 0; i < size; ++i) {
+        if (individual.picked[i] == 1) {
+            individual.weights[i] /= sumWeights;
+        }
+    }
+
+    return individual;
+}
+
+
+
 
 Frontiers non_dominant_sort(Population& population){
     evaluate(population);
@@ -476,7 +440,7 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
 }
 
 /**
- * Repair only for CARDINALITY constraint (Streichert et al.):
+ * Repair only for constraint (Streichert et al.):
  *  - Keep only the K largest weights among selected assets
  *  - Set the rest to picked=0 and weight=0
  *  - Normalize remaining picked weights to sum to 1
@@ -484,11 +448,11 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
  *
  * This version is Lamarckian (it changes genotype: picked + weights).
  */
-void repair_population(vector<Individual> &population) {
+void repair_individual(Individual &individual) {
 
     auto ensure_at_least_one_picked = [&](Individual& ind) {
         int pickedCount = 0;
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0);
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0); 
         if (pickedCount > 0) return;
 
         // pick the max-weight gene (or random) and force it
@@ -563,23 +527,21 @@ void repair_population(vector<Individual> &population) {
         }
     };
 
-    for (auto& ind : population) {
-        // 1) ensure at least one selected
-        ensure_at_least_one_picked(ind);
+    // 1) ensure at least one selected
+    ensure_at_least_one_picked(individual);
 
-        // 2) cardinality repair (keep only K largest)
-        apply_cardinality_keep_k_largest(ind);
+    // 2) cardinality repair (keep only K largest)
+    apply_cardinality_keep_k_largest(individual);
 
-        // 3) ensure at least one again (just in case)
-        ensure_at_least_one_picked(ind);
+    // 3) ensure at least one again (just in case)
+    ensure_at_least_one_picked(individual);
 
-        // 4) normalize to sum 1
-        normalize(ind);
+    // 4) normalize to sum 1
+    normalize(individual);
 
-        // 5) final consistency
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-            if (!ind.picked[i]) ind.weights[i] = 0.0;
-        }
+    // 5) final consistency
+    for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+        if (!individual.picked[i]) individual.weights[i] = 0.0;
     }
 }
 
@@ -695,6 +657,52 @@ void add_population_to_archive(Archive& archive, Population& population){
     }
 }
 
+/* Generates a random population*/
+Population generate_population(int size, PortfolioData data){
+    Population population;
+    population.reserve(POP_SIZE);
+
+    for(int i=0; i<size; i++){
+        Individual individual = generate_decision(NUMBER_OF_ASSETS, rng);
+        repair_individual(individual);
+        individual.expectedReturn = calculate_expected_return(individual, data);
+        individual.risk = calculate_risk(individual, data);
+        population.push_back(individual);
+    }
+
+    return population;
+}
+
+/* Generates a population with genetic operations */
+Population generate_population(Population population, PortfolioData data){
+    Population offspring;
+    offspring.reserve(POP_SIZE);
+
+    while ((int)offspring.size() < POP_SIZE) {
+        int p1 = tournament_select_index(population, rng);
+        int p2 = tournament_select_index(population, rng);
+        while (p2 == p1 && (int)population.size() > 1) {
+            p2 = tournament_select_index(population, rng);
+        }
+
+        Population children = crossover(population[p1], population[p2]);
+
+        for (auto& child : children) {
+            // mutation + repair/normalize
+            mutate(child);
+            repair_individual(child);
+            child.risk = calculate_risk(child, data);
+            child.expectedReturn = calculate_expected_return(child, data);
+
+            offspring.push_back(move(child));
+            if ((int)offspring.size() >= POP_SIZE) break;
+        }
+    }
+
+    return offspring;
+}
+
+
 
 Population run_nsgaII(){
     Archive archive = {};
@@ -703,13 +711,12 @@ Population run_nsgaII(){
     NUMBER_OF_ASSETS = data.mean.size();
     portfolioData = data;
     Population population = generate_population(POP_SIZE, data);
-    
     Frontiers frontiers = non_dominant_sort(population); 
     
     population.reserve(POP_SIZE * 2);
     Population nextGeneration;
     nextGeneration.reserve(POP_SIZE*2);
-   
+
 
     for(int i=0; i<GENERATIONS; i++){
         nextGeneration.clear();
@@ -728,13 +735,6 @@ Population run_nsgaII(){
         nextGeneration.insert(nextGeneration.end(), frontiers[frontierIndex].begin(), frontiers[frontierIndex].begin() + remainingSpace);
 
         Population offspring = generate_population(nextGeneration, data);
-        repair_population(offspring);
-
-        for (auto& child : offspring) {
-            child.expectedReturn = calculate_expected_return(child, data);
-            child.risk = calculate_risk(child, data);
-        }
-
         
         // concatenation of nextGeneration + offspring
         population.clear();
