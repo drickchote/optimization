@@ -11,6 +11,7 @@
 using namespace std;
 
 static int OUTPUT = 1;
+static int PRINT_SELECTION = 0;
 
 static constexpr int POP_SIZE = 250;
 static constexpr int GENERATIONS = 400;
@@ -19,7 +20,7 @@ static constexpr double UB = 1.0; //
 static constexpr double K = 10; // max picked assets 
 int NUMBER_OF_ASSETS = 0;
 
-mt19937 rng(42);
+mt19937 rng(2);
 
 using Population = NSGAII_Population;
 using Frontiers = NSGAII_Frontiers; 
@@ -45,23 +46,22 @@ static inline double clamp01(double x) {
 
 void print_individual(Individual individual){
     if(OUTPUT){
-        cout << setprecision(17) << individual.risk << " " << individual.expectedReturn << endl;
-        return;
+        cout << setprecision(17) << individual.risk << " " << individual.expectedReturn;
     }
 
-    cout << "______________" << endl;
-    for(int i=0; i<NUMBER_OF_ASSETS; i++){
-        if(individual.picked[i]){
-            cout << 1;
-        } else {
-            cout << 0;
+    if(PRINT_SELECTION){
+        cout << " ";
+        for(int i=0; i<NUMBER_OF_ASSETS; i++){
+            cout << individual.picked[i];
+        }
+
+        cout << individual.weights[0];
+        for(int i=1; i<NUMBER_OF_ASSETS; i++){
+            cout  << setprecision(17) << "," << individual.weights[i];
         }
     }
+    
     cout << endl;
-
-    cout << "Expected Return: " << individual.expectedReturn << endl;
-    cout << "Risk: " << individual.risk << endl;
-    cout << "______________" << endl;
 }
 
 
@@ -153,7 +153,6 @@ static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) 
 }
 
 /** Crossover operation based on (streichert, 2004b) */
-/** TODO: Try other crossover operations? */
 Population crossover(Individual individual1, Individual individual2) {
     Population children;
     children.reserve(2);
@@ -189,51 +188,6 @@ Population crossover(Individual individual1, Individual individual2) {
         return dist(rng);
     };
 
-    auto normalize_child = [&](Individual& c) {
-        // zerate weights of non chosed
-        double sum = 0.0;
-        int countPicked = 0;
-
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-            if (c.picked[i] == 0) {
-                c.weights[i] = 0.0;
-                continue;
-            }
-            countPicked++;
-
-            // clamp
-            if (c.weights[i] < LB) c.weights[i] = LB;
-            if (c.weights[i] > UB) c.weights[i] = UB;
-
-            sum += c.weights[i];
-        }
-
-        // if none was chosed forces 1
-        if (countPicked == 0) {
-            int idx = randi(rng, 0, NUMBER_OF_ASSETS - 1);
-            c.picked[idx] = 1;
-            c.weights[idx] = 1.0;
-            // resto já está 0
-            return;
-        }
-
-        // if the sums still 0 forces 1
-        if (nearly_equal(sum, 0.0)) {
-            int idx = -1;
-            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-                if (c.picked[i]) { idx = i; break; }
-            }
-            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) c.weights[i] = 0.0;
-            c.weights[idx] = 1.0;
-            return;
-        }
-
-        // normalize to sum 1
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-            if (c.picked[i] == 1) c.weights[i] /= sum;
-        }
-    };
-
     // 2) weights:
     for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
         const double p1 = individual1.weights[i];
@@ -243,16 +197,12 @@ Population crossover(Individual individual1, Individual individual2) {
         child2.weights[i] = blx_gene(p1, p2);
     }
 
-    normalize_child(child1);
-    normalize_child(child2);
-
     children.push_back(move(child1));
     children.push_back(move(child2));
     return children;
 }
 
 /** Mutation based on (streichert, 2004b)  */
-/** TODO: review sigma value*/
 void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, double sigma = 0.05) {
     // --- Bit-string one-point mutation (flip 1 gene) ---
     if (!individual.picked.empty() && rand01(rng) <= pm_bits) {
@@ -336,28 +286,16 @@ Individual generate_decision(int size, mt19937& rng) {
             pickedCount++;
     }
 
-    // TODO: check the possibility of move this to the repair function
     // At least one should be selected 
     if (pickedCount == 0) {
         int idx = uniform_int_distribution<int>(0, size - 1)(rng);
         individual.picked[idx] = 1;
-        pickedCount = 1;
     }
 
     // Generate weights for the selected assets
-    double sumWeights = 0.0;
     for (int i = 0; i < size; ++i) {
         if (individual.picked[i] == 1) {
             individual.weights[i] = realDist(rng);
-            sumWeights += individual.weights[i];
-        }
-    }
-
-    // TODO: check the possibility of move this to the repair function
-    // normalization
-    for (int i = 0; i < size; ++i) {
-        if (individual.picked[i] == 1) {
-            individual.weights[i] /= sumWeights;
         }
     }
 
@@ -449,12 +387,10 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
  * This version is Lamarckian (it changes genotype: picked + weights).
  */
 void repair_individual(Individual &individual) {
-
     auto ensure_at_least_one_picked = [&](Individual& ind) {
         int pickedCount = 0;
         for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0); 
         if (pickedCount > 0) return;
-
         // pick the max-weight gene (or random) and force it
         int best = 0;
         double bestW = -1.0;
@@ -463,31 +399,6 @@ void repair_individual(Individual &individual) {
         }
         ind.picked[best] = 1;
         ind.weights[best] = 1.0;
-    };
-
-    auto normalize = [&](Individual& ind) {
-        double sum = 0.0;
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-            if (ind.picked[i] == 0) continue;
-            // optional bounds; keep consistent with "no short sales"
-            ind.weights[i] = clamp01(ind.weights[i]);
-            sum += ind.weights[i];
-        }
-
-        if (nearly_equal(sum, 0.0)) {
-            // fallback: all mass on first picked asset
-            int idx = -1;
-            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-                if (ind.picked[i]) { idx = i; break; }
-            }
-            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) ind.weights[i] = 0.0;
-            if (idx >= 0) ind.weights[idx] = 1.0;
-            return;
-        }
-
-        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
-            if (ind.picked[i] == 1) ind.weights[i] /= sum;
-        }
     };
 
     auto apply_cardinality_keep_k_largest = [&](Individual& ind) {
@@ -527,21 +438,60 @@ void repair_individual(Individual &individual) {
         }
     };
 
-    // 1) ensure at least one selected
+    auto normalize = [&](Individual& ind) {
+        double sum = 0.0;
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 0){
+                ind.weights[i] = 0.0;
+            } else {
+                ind.weights[i] = clamp01(ind.weights[i]);
+                sum += ind.weights[i];
+            }
+
+        }
+
+        if (nearly_equal(sum, 0.0)) {
+            // fallback: all mass on first picked asset
+            int idx = -1;
+            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+                if (ind.picked[i]) { idx = i; break; }
+            }
+            for (int i = 0; i < NUMBER_OF_ASSETS; ++i) ind.weights[i] = 0.0;
+            if (idx >= 0) ind.weights[idx] = 1.0;
+            return;
+        }
+
+        int pickedCount = 0;
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0); 
+
+        /* Adding lower bound constraint
+        * Anagnostopoulos, 2011, pg. 4, section 3.2.2
+        */
+        for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
+            if (ind.picked[i] == 1) {
+                if(individual.weights[i] < 0){
+                    cout << "Deu ruim vei"  << endl;
+                }
+                ind.weights[i] = LB  + (ind.weights[i] / sum) * ( 1 - LB * pickedCount);
+            }
+        }
+    };
+
+
+
+    // // 1) ensure at least one selected
     ensure_at_least_one_picked(individual);
 
     // 2) cardinality repair (keep only K largest)
     apply_cardinality_keep_k_largest(individual);
 
-    // 3) ensure at least one again (just in case)
-    ensure_at_least_one_picked(individual);
-
-    // 4) normalize to sum 1
+    // 3) normalize to sum 1
     normalize(individual);
 
-    // 5) final consistency
+    // ) final consistency
     for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
         if (!individual.picked[i]) individual.weights[i] = 0.0;
+        
     }
 }
 
