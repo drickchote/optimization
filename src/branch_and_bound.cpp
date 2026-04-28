@@ -207,7 +207,7 @@ Node make_with(Node &previous){
     with.fixedInAssets.push_back(1);
 
     with.selectedCount = previous.selectedCount+1;
-    with.priority = -with.level;
+    with.priority = with.level;
 
     return with;
 }
@@ -221,7 +221,7 @@ Node make_without(Node &previous){
         without.fixedInAssets.push_back(asset);
     }
     without.fixedInAssets.push_back(0);
-    without.priority = -without.level;
+    without.priority = without.level;
 
     return without;
 }
@@ -366,9 +366,119 @@ bool test_pruning(vector<WeightedBound>& LB, vector<Point>& N) {
     return true;
 }
 
+class PortfolioSolver{
+    private: 
+        GRBEnv env;
+        unique_ptr<GRBModel> model;
+        vector<GRBVar> w;
+        vector<GRBVar> y;
+        vector<GRBConstr> fixedConstrs;
+public:
+    PortfolioSolver() : env(true) {
+        try{
+            
+            env.set(GRB_IntParam_OutputFlag, 0);
+            env.start();
+            model = std::make_unique<GRBModel>(env);
+    
+            w.resize(NUMBER_OF_ASSETS);
+            y.resize(NUMBER_OF_ASSETS);
+    
+            for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
+                w[i] = model->addVar(0.0, 1.0, 0.0, GRB_CONTINUOUS);
+                y[i] = model->addVar(0.0, 1.0, 0.0, GRB_BINARY);
+            }
+    
+            for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
+                model->addConstr(w[i] <= y[i]);
+                model->addConstr(w[i] >= weight_lower_bound * y[i]);
+            }
+    
+            GRBLinExpr sumWeights = 0.0;
+            GRBLinExpr pickedNumber = 0.0;
+    
+            for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
+                sumWeights += w[i];
+                pickedNumber += y[i];
+            }
+    
+            model->addConstr(sumWeights == 1.0);
+            model->addConstr(pickedNumber <= K);
+    
+            model->update();
+        } catch (GRBException e){
+            cout << e.getMessage() << endl;
+            exit(1);
+        }
+    }
+
+    bool solveNodeLambda(Individual& individual, const Node& node, double lambda) {
+        try{
+            clearFixedConstraints();
+            applyFixedConstraints(node);
+            setObjective(lambda);
+    
+            model->optimize();
+    
+            if (model->get(GRB_IntAttr_SolCount) == 0) {
+                return false;
+            }
+            individual.weights.clear();
+            individual.picked.clear();
+    
+            for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
+                double wi = w[i].get(GRB_DoubleAttr_X);
+                double yi = y[i].get(GRB_DoubleAttr_X);
+    
+                individual.weights.push_back(wi);
+                individual.picked.push_back(yi > 0.5 ? 1 : 0);
+            }
+        } catch(GRBException e){
+            cout << e.getMessage() << endl;
+            exit(1);
+        }
 
 
-bool bound(Node &node, Archive& UB,  vector<double> &lambdaList,  bool shouldCalculateLambdas, vector<Point> &N){
+        individual.expectedReturn = calculate_expected_return(individual);
+        individual.risk = calculate_risk(individual);
+
+        return true;
+    }
+
+private:
+    void clearFixedConstraints() {
+        for (auto& c : fixedConstrs) {
+            model->remove(c);
+        }
+        fixedConstrs.clear();
+        model->update();
+    }
+
+    void applyFixedConstraints(const Node& node) {
+        for (int i = 0; i < node.fixedInAssets.size(); i++) {
+            if (node.fixedInAssets[i] == 0) {
+                fixedConstrs.push_back(model->addConstr(y[i] == 0));
+            } else {
+                fixedConstrs.push_back(model->addConstr(y[i] == 1));
+            }
+        }
+        model->update();
+    }
+
+    void setObjective(double lambda) {
+        GRBQuadExpr risk = calculate_risk(w.data());
+        GRBLinExpr expectedReturn = calculate_expected_return(w.data());
+
+        model->setObjective(
+            lambda * risk - (1.0 - lambda) * expectedReturn,
+            GRB_MINIMIZE
+        );
+    }
+};
+
+
+
+bool bound(Node &node, Archive& UB,  vector<double> &lambdaList,  bool shouldCalculateLambdas, vector<Point> &N, PortfolioSolver &solver){
     if(shouldCalculateLambdas){
         lambdaList.clear();
         lambdaList.reserve(UB.size());
@@ -379,7 +489,13 @@ bool bound(Node &node, Archive& UB,  vector<double> &lambdaList,  bool shouldCal
     bool upperBoundHasChanged = false;
     for(auto lambda : lambdaList){
         Individual individual = {};
-        bool found = solve(individual, lambda, node);
+        bool found = false;
+        try {
+            found = solver.solveNodeLambda(individual, node, lambda);
+        } catch(GRBException e){
+            cout << e.getMessage() << endl;
+            exit(1);
+        }
 
     
         if(!found) continue;
@@ -538,6 +654,15 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
     int treeHeight = NUMBER_OF_ASSETS + 1;
     unsigned long long missingNodes = numberOfNodes;
 
+    try{
+        PortfolioSolver solver;
+    } catch (GRBException e){
+        cout << e.getMessage() << endl;
+        exit(1);
+    }
+
+        PortfolioSolver solver;
+
     const auto time_start = std::chrono::steady_clock::now();
     while(!pq.empty()){
         missingNodes--;
@@ -568,7 +693,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
         }
 
         Node with = make_with(current);
-        upperBoundHasChanged = bound(with, UB, lambdaList, upperBoundHasChanged, nadirPoints);
+        upperBoundHasChanged = bound(with, UB, lambdaList, upperBoundHasChanged, nadirPoints, solver);
         if(!with.prunable){
             pq.push(with);
         } else {
@@ -579,7 +704,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
         }
      
         Node without = make_without(current);
-        upperBoundHasChanged = bound(without, UB, lambdaList, upperBoundHasChanged, nadirPoints);
+        upperBoundHasChanged = bound(without, UB, lambdaList, upperBoundHasChanged, nadirPoints, solver);
         if(!without.prunable){
             pq.push(without);
         } else {
@@ -593,6 +718,8 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
     cout << "finished BB" << endl;
     return 0.0;
 }
+
+
 
 
 int main(int argc, char** argv) {
@@ -615,7 +742,7 @@ int main(int argc, char** argv) {
     Archive UB = {};
 
     if (!checkpoint_in.empty()) {
-        portfolioData = PortfolioDataLoader::load_from_file("port1.txt");
+        portfolioData = PortfolioDataLoader::load_from_file("../inputs/port1.txt");
         NUMBER_OF_ASSETS = portfolioData.n;
     } else {
         convert_nsgaii_population(UB, run_nsgaII());
@@ -625,7 +752,7 @@ int main(int argc, char** argv) {
             }
             return a.expectedReturn > b.expectedReturn;
         });
-        portfolioData = PortfolioDataLoader::load_from_file("port1.txt");
+        portfolioData = PortfolioDataLoader::load_from_file("../inputs/port1.txt");
         NUMBER_OF_ASSETS = portfolioData.n;
     }
 
