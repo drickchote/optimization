@@ -28,6 +28,7 @@ struct WeightedBound {
     double lbValue;
     Individual individual;
 };
+int shit_solutions = 0;
 
 
 using Archive = vector<Individual>;
@@ -113,15 +114,245 @@ bool dominates(const Individual& a, const Individual& b){
         || (betterRisk && noWorseReturn);
 }
 
+double calculate_lambda(const Individual& ind1, const Individual& ind2) {
+    double v11 = ind1.risk;
+    double v12 = -ind1.expectedReturn;
+    double v21 = ind2.risk;
+    double v22 = -ind2.expectedReturn;
+
+    double numerator = v22 - v12;
+    double denominator = v11 - v21 + v22 - v12;
+
+    if (!std::isfinite(v11) || !std::isfinite(v12) ||
+        !std::isfinite(v21) || !std::isfinite(v22)) {
+                cout << "!std::isfinite(v11) || !std::isfinite(v12) || !std::isfinite(v21) || !std::isfinite(v22))" << endl;
+    }
+
+    if (std::abs(denominator) < 1e-12) {
+        cout << "std::abs(denominator) < 1e-12" << endl;
+        exit(1);
+    }
+
+    double lambda = numerator / denominator;
+
+    if (!std::isfinite(lambda)) {
+        cout << "Lambda is infinity" << endl;
+        exit(1);
+
+    }
+
+    if (lambda <= 0.0 || lambda >= 1.0) {
+        std::cout << "Invalid lambda: " << lambda << std::endl;
+        std::cout << "p1: risk=" << ind1.risk
+                  << ", return=" << ind1.expectedReturn << std::endl;
+        std::cout << "p2: risk=" << ind2.risk
+                  << ", return=" << ind2.expectedReturn << std::endl;
+        std::cout << "numerator=" << numerator
+                  << ", denominator=" << denominator << std::endl;
+
+        exit(1);
+    }
+
+    return lambda;
+}
+
+void calculate_lambdas(vector<double>& lambda, Archive& UB){
+    if (UB.size() < 2) {
+        return;
+    }
+    
+    lambda.reserve(UB.size());
+    lambda.clear();
+
+    for(int i=0; i<UB.size()-1; i++){
+        auto p1 = UB[i];
+        auto p2 = UB[i+1];
+
+        double result = calculate_lambda(p1, p2);
+
+        if (result > 0.0 && result < 1.0){
+            lambda.push_back(result);
+        }
+    }
+}
+
+/*
+    N is the set of points used to construct a representation of the UB≺
+*/
+void calculate_nadir_points(vector<Point> &nadirPoints, Archive &UB){
+    if (UB.size() < 2) {
+        return;
+    }
+
+    nadirPoints.reserve(UB.size());
+    nadirPoints.clear();
+    if (UB.size() < 2) return;
+    for(int i = 0; i<UB.size()-1; i++){
+        nadirPoints.push_back({UB[i+1].risk, -UB[i].expectedReturn});
+    }
+}
+
+void print_individual(Individual individual){
+        cout << setprecision(17) << individual.risk << " " << individual.expectedReturn;
+
+    cout << endl;
+}
+
+/**
+ * After adding a new individual to UB we need update the lambdas in the following way:
+ * Before: p1 λ0 p2 | After: p1 λ1 newP λ2 p2
+ * 
+ */
+void adjust_lambda_after_adding(Archive &UB, vector <double>&lambdaList, int pointPosition, Individual newIndividual){
+
+    /**
+     * For calculate lambda we need at last 2 points
+     */
+    if (UB.size() <= 1) {
+        lambdaList.clear();
+        return;
+    }
+
+    /**
+     * It it's first point in UB we add only one lambda between this new point and the next
+     */
+    if (pointPosition == 0) {
+        lambdaList.insert(lambdaList.begin(), calculate_lambda(newIndividual, UB[pointPosition+1]));
+        return;
+    }
 
 
-void add_to_archive(Archive& UB, const Individual& individual) {
+    /**
+     * If it's the last point in UB we add only one lambda between this new point and the previous
+     */
+    if (pointPosition == UB.size()-1) {
+        lambdaList.push_back(calculate_lambda(UB[pointPosition -1], newIndividual));
+        return;
+    }
+
+    auto previousPoint = UB[pointPosition -1];
+    auto nextPoint = UB[pointPosition+1];
+
+    /**
+     * If the new point is in the middle of UB we need to replace 1 lambda (the one between newIndividual and the previous )
+     * and add a new one between the newIndividual and the next point.
+     */
+    double lambdaBefore = calculate_lambda(previousPoint, newIndividual);
+    double lambdaAfter = calculate_lambda(newIndividual, nextPoint);
+
+    lambdaList[pointPosition] = lambdaBefore; // Replace the older lambda for this position
+    lambdaList.insert(lambdaList.begin() + pointPosition, lambdaAfter);
+}
+
+/**
+ * After removing an individual from UB we need update the lambdas in the following way:
+ * Before: p1 λ1 p2 λ2 p3 | After: p1 λ0 p3
+ * 
+ */
+void adjust_lambda_after_removal(Archive &UB, vector <double>&lambdaList, int pointPosition){
+
+    if (UB.empty()) {
+        lambdaList.clear();
+        return;
+    }
+
+    if (pointPosition == 0) {
+        if (!lambdaList.empty()) {
+            lambdaList.erase(lambdaList.begin());
+        }
+        return;
+    }
+
+     // Remotion of the last lambda
+    if (pointPosition == UB.size() - 1) {
+        lambdaList.pop_back();
+        return;
+    } 
+
+    lambdaList.erase(lambdaList.begin() + pointPosition);
+
+    auto previousPoint = UB[pointPosition -1];
+    auto nextPoint = UB[pointPosition]; // The next point has the same position as the individual that was removed
+
+    double newLambda = calculate_lambda(previousPoint, nextPoint);
+    
+    lambdaList[pointPosition-1] = newLambda; // Replace the older lambda for this position
+}
+
+void adjust_nadir_after_adding(Archive &UB, vector <Point>&nadirList, int pointPosition, Individual newIndividual){
+
+    if (UB.size() <= 1) {
+        nadirList.clear();
+        return;
+    }
+
+    if (pointPosition == 0) {
+        nadirList.insert(nadirList.begin(), {UB[pointPosition+1].risk, -UB[pointPosition].expectedReturn});
+        return;
+    }
+
+    if (pointPosition == UB.size()-1) {
+        nadirList.push_back({newIndividual.risk, -UB[pointPosition].expectedReturn});
+        return;
+    }
+
+
+    auto previousPoint = UB[pointPosition -1];
+    auto nextPoint = UB[pointPosition+1];
+
+    Point nadirBefore = {newIndividual.risk, -previousPoint.expectedReturn};
+    Point nadirAfter = {nextPoint.risk, -newIndividual.expectedReturn};
+
+
+    nadirList[pointPosition] = nadirBefore; // Replace the older lambda for this position
+    nadirList.insert(nadirList.begin() + pointPosition, nadirAfter);
+}
+
+void adjust_nadir_after_removal(Archive &UB, vector <Point>&nadirList, int pointPosition){
+    
+    if (UB.empty()) {
+        nadirList.clear();
+        return;
+    }
+
+    if (pointPosition == 0) {
+        if (!nadirList.empty()) {
+            nadirList.erase(nadirList.begin());
+        }
+        return;
+    }
+
+     // Remotion of the last lambda
+    if (pointPosition == UB.size() - 1) {
+        nadirList.pop_back();
+        return;
+    } 
+
+    nadirList.erase(nadirList.begin() + pointPosition);
+
+    auto previousPoint = UB[pointPosition -1];
+    auto nextPoint = UB[pointPosition]; // The next point has the same position as the individual that was removed
+
+    Point newNadir = {nextPoint.risk, -previousPoint.expectedReturn};
+    
+    nadirList[pointPosition-1] = newNadir; // Replace the older nadir for this position
+}
+
+
+
+void add_to_archive(Archive& UB, const Individual& individual, vector<double> &lambdaList, vector<Point> &nadirPoints) {
+
     if(UB.size() > 5000){ // Temp TODO - Remove
         return;
     }
+
     for (auto it = UB.begin(); it != UB.end(); ) {
         if (dominates(individual, *it)) {
+            int pointPosition = it - UB.begin();
             it = UB.erase(it);  
+            adjust_lambda_after_removal(UB, lambdaList, pointPosition);
+            adjust_nadir_after_removal(UB, nadirPoints, pointPosition);
+
         } else {
             ++it;
         }
@@ -132,7 +363,10 @@ void add_to_archive(Archive& UB, const Individual& individual) {
         ++it;
     }
 
+    int pointPosition = it - UB.begin();
     UB.insert(it, individual);
+    adjust_lambda_after_adding(UB, lambdaList, pointPosition, individual);
+    adjust_nadir_after_adding(UB, nadirPoints, pointPosition, individual);
 }
 
 
@@ -162,7 +396,6 @@ double calculate_risk(const Individual& ind) {
     return variance;
 }
 
-
 void convert_nsgaii_population(Archive &UB, NSGAII_Population population){
     UB.reserve(population.size());
 
@@ -178,8 +411,14 @@ void convert_nsgaii_population(Archive &UB, NSGAII_Population population){
 
 bool dominated_or_existing_solution(Archive& archive, const Individual& ind){
     for (const auto& ub : archive){
-        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn) && nearly_equal(ub.risk, ind.risk))){
+        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn))){
+            if(nearly_equal(ub.risk, ind.risk)){
+                // cout << "same shit solution: ";
+                shit_solutions++;
+                // cout << setprecision(16) << ind.risk<< " " << ind.expectedReturn << " times:" << shit_solutions << endl;;
+            }
             return true;
+
         }
     }
     return false;
@@ -226,113 +465,6 @@ Node make_without(Node &previous){
     return without;
 }
 
-
-
-/*
-    N is the set of points used to construct a representation of the UB≺
-*/
-void calculate_nadir_points(vector<Point> &nadirPoints, Archive &UB){
-    nadirPoints.clear();
-    if (UB.size() < 2) return;
-    cout << "UB size " << UB.size() << endl; 
-    for(int i = 0; i<UB.size()-1; i++){
-        nadirPoints.push_back({UB[i+1].risk, -UB[i].expectedReturn});
-    }
-}
-
-void calculate_lambdas(vector<double>& lambda, Archive& UB){
-    for(int i=0; i<UB.size()-1; i++){
-        auto p1 = UB[i];
-        auto p2 = UB[i+1];
-
-        auto v11 = p1.risk;
-        auto v12 = - p1.expectedReturn;
-        auto v21 = p2.risk;
-        auto v22 = -p2.expectedReturn;
-
-        auto result = (v22 - v12) / (v11 - v21 + v22 - v12);
-        if (result > 0.0 && result < 1.0){
-            lambda.push_back((v22 - v12) / (v11 - v21 + v22 - v12));
-        }
-    }
-}
-
-
-/**
- * Solve min(λf1(x) - (1-λ)f2(x))
- */
-bool solve(Individual &individual, double lambda, Node& node){
-    try{
-        GRBEnv env = GRBEnv(true);
-        env.set(GRB_IntParam_OutputFlag, 0);
-        env.start();
-    
-        GRBModel model = GRBModel(env);
-
-        GRBVar* w = model.addVars(NUMBER_OF_ASSETS);
-        GRBVar* y = model.addVars(NUMBER_OF_ASSETS, GRB_BINARY);
-
-        for(int i = 0; i < NUMBER_OF_ASSETS; i++){
-            w[i].set(GRB_DoubleAttr_LB, 0.0);
-            w[i].set(GRB_DoubleAttr_UB, 1.0);
-        }
-
-        for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
-            model.addConstr(w[i] <= y[i]);
-            model.addConstr(w[i] >= weight_lower_bound * y[i]);
-        }
-
-        for(int i = 0; i< node.fixedInAssets.size(); i++){
-            if(node.fixedInAssets[i] == 0){
-                model.addConstr(y[i] == 0);
-            } else {
-                model.addConstr(y[i] == 1);
-            }
-        }
-
-        GRBLinExpr sumWeights = 0.0;
-        GRBLinExpr pickedNumber = 0;
-
-        for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
-            sumWeights += w[i];
-            pickedNumber+= y[i];
-        }
-
-        model.addConstr(sumWeights == 1.0);
-        model.addConstr(pickedNumber <= K);
-                
-        auto risk = calculate_risk(w);
-        auto expectedReturn = calculate_expected_return(w);
-        
-        
-        model.setObjective(lambda * risk - (1-lambda) * expectedReturn, GRB_MINIMIZE);
-        model.optimize();
-
-        bool found = false;
-
-        if (model.get(GRB_IntAttr_SolCount) > 0) {
-            found = true;
-
-            individual.weights.clear();
-            individual.picked.clear();
-            for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
-                individual.weights.push_back(w[i].get(GRB_DoubleAttr_X));
-                individual.picked.push_back(y[i].get(GRB_DoubleAttr_X) > 0.5 ? 1 : 0);
-            }
-            individual.expectedReturn = calculate_expected_return(individual);
-            individual.risk = calculate_risk(individual);
-        }
-
-        return found;
-     } catch (GRBException &e) {
-        cout << "Error code = " << e.getErrorCode() << endl;
-        cout << e.getMessage() << endl;
-        exit(1);
-    } catch (...) {
-        cout << "Exception during optimization" << endl;
-        exit(1);
-    }
-}
 
 bool test_pruning(vector<WeightedBound>& LB, vector<Point>& N) {
     if(LB.empty()){
@@ -416,25 +548,26 @@ public:
         try{
             clearFixedConstraints();
             applyFixedConstraints(node);
+
             setObjective(lambda);
     
             model->optimize();
-    
             if (model->get(GRB_IntAttr_SolCount) == 0) {
                 return false;
             }
+
             individual.weights.clear();
             individual.picked.clear();
     
             for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
                 double wi = w[i].get(GRB_DoubleAttr_X);
                 double yi = y[i].get(GRB_DoubleAttr_X);
-    
+
                 individual.weights.push_back(wi);
                 individual.picked.push_back(yi > 0.5 ? 1 : 0);
             }
         } catch(GRBException e){
-            cout << e.getMessage() << endl;
+            cout << "Gurobi:" << e.getMessage() << endl;
             exit(1);
         }
 
@@ -468,26 +601,37 @@ private:
     void setObjective(double lambda) {
         GRBQuadExpr risk = calculate_risk(w.data());
         GRBLinExpr expectedReturn = calculate_expected_return(w.data());
-
-        model->setObjective(
-            lambda * risk - (1.0 - lambda) * expectedReturn,
-            GRB_MINIMIZE
-        );
+        double expr;
+        if(lambda == 0){
+            model->setObjective(
+                -expectedReturn,
+                GRB_MINIMIZE
+            );
+        } else if (lambda == 1){
+            model->setObjective(
+                risk,
+                GRB_MINIMIZE
+            );
+        } else {
+            model->setObjective(
+                lambda * risk - (1.0 - lambda) * expectedReturn,
+                GRB_MINIMIZE
+            );
+        }
     }
 };
 
 
-
-bool bound(Node &node, Archive& UB,  vector<double> &lambdaList,  bool shouldCalculateLambdas, vector<Point> &N, PortfolioSolver &solver){
-    if(shouldCalculateLambdas){
-        lambdaList.clear();
-        lambdaList.reserve(UB.size());
-        calculate_lambdas(lambdaList, UB);
-    }
-
+bool bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &nadirPoints, PortfolioSolver &solver){
     vector<WeightedBound> LB;
-    bool upperBoundHasChanged = false;
+    
+    vector<Individual> candidates;
+    
     for(auto lambda : lambdaList){
+        if (!std::isfinite(lambda)) {
+            cout << "Invalid lambda before solve: " << lambda << endl;
+            exit(1);
+        }
         Individual individual = {};
         bool found = false;
         try {
@@ -496,21 +640,21 @@ bool bound(Node &node, Archive& UB,  vector<double> &lambdaList,  bool shouldCal
             cout << e.getMessage() << endl;
             exit(1);
         }
-
     
         if(!found) continue;
         double lbValue = lambda * individual.risk - (1 - lambda) * individual.expectedReturn;
         LB.push_back(WeightedBound({lambda, lbValue, individual}));
 
+        candidates.push_back(individual);
+    }
+
+    for(auto individual : candidates){
         if(!dominated_or_existing_solution(UB, individual)){
-            add_to_archive(UB, individual);
-            upperBoundHasChanged = true;
+            add_to_archive(UB, individual, lambdaList, nadirPoints);
         } 
     }
 
-
-    node.prunable = test_pruning(LB, N);
-    return upperBoundHasChanged;
+    node.prunable = test_pruning(LB, nadirPoints);
 }
 
 static constexpr const char* CKPT_MAGIC = "BB_CKPT_V1";
@@ -645,26 +789,23 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
      * UB< as UB< = {v ∈ R^p | ∃w ∈ N, v ≺≺ w }
      */
     vector<Point> nadirPoints = {};
-    nadirPoints.reserve(UB.size());
     vector<double> lambdaList = {};
-
-    bool upperBoundHasChanged = true;
 
     unsigned long long numberOfNodes = (1ULL << (NUMBER_OF_ASSETS+1)) - 1;
     int treeHeight = NUMBER_OF_ASSETS + 1;
     unsigned long long missingNodes = numberOfNodes;
 
-    try{
-        PortfolioSolver solver;
-    } catch (GRBException e){
-        cout << e.getMessage() << endl;
-        exit(1);
-    }
+    calculate_nadir_points(nadirPoints, UB);
+    calculate_lambdas(lambdaList, UB);
 
-        PortfolioSolver solver;
+    PortfolioSolver solver;
 
     const auto time_start = std::chrono::steady_clock::now();
     while(!pq.empty()){
+        cout << "UB size " << UB.size() << endl; 
+        cout << "Lambda size" << lambdaList.size() << endl; 
+        cout << "nadir size" << nadirPoints.size() << endl; 
+
         missingNodes--;
         cout << "Missing Nodes: "<< missingNodes << endl;
         i++; 
@@ -681,19 +822,14 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
         }
         Node current = pq.top();
         pq.pop();
-       
 
         
         if(current.selectedCount >= K || current.level == NUMBER_OF_ASSETS){ 
             continue;
         }
 
-        if(upperBoundHasChanged){
-            calculate_nadir_points(nadirPoints, UB);
-        }
-
         Node with = make_with(current);
-        upperBoundHasChanged = bound(with, UB, lambdaList, upperBoundHasChanged, nadirPoints, solver);
+        bound(with, UB, lambdaList,  nadirPoints, solver);
         if(!with.prunable){
             pq.push(with);
         } else {
@@ -704,7 +840,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
         }
      
         Node without = make_without(current);
-        upperBoundHasChanged = bound(without, UB, lambdaList, upperBoundHasChanged, nadirPoints, solver);
+        bound(without, UB, lambdaList, nadirPoints, solver);
         if(!without.prunable){
             pq.push(without);
         } else {
