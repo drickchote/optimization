@@ -10,11 +10,13 @@
 #include <cmath>
 #include <map>
 #include <chrono>
+#include "trie.hpp"
 
 
 static constexpr double K = 10; // max picked assets 
 static constexpr double weight_lower_bound = 0.01; //
 static constexpr double weight_upper_bound = 1.0; //
+static constexpr double DEBUG = 0;
 
 struct Individual{
     vector<int> picked; // list of assets weights
@@ -342,9 +344,9 @@ void adjust_nadir_after_removal(Archive &UB, vector <Point>&nadirList, int point
 
 void add_to_archive(Archive& UB, const Individual& individual, vector<double> &lambdaList, vector<Point> &nadirPoints) {
 
-    if(UB.size() > 5000){ // Temp TODO - Remove
-        return;
-    }
+    // if(UB.size() > 5000){ // Temp TODO - Remove
+    //     return;
+    // }
 
     for (auto it = UB.begin(); it != UB.end(); ) {
         if (dominates(individual, *it)) {
@@ -505,6 +507,7 @@ class PortfolioSolver{
         vector<GRBVar> w;
         vector<GRBVar> y;
         vector<GRBConstr> fixedConstrs;
+        unordered_map<double, Trie> optimalsPerLambdas;
 public:
     PortfolioSolver() : env(true) {
         try{
@@ -545,6 +548,13 @@ public:
     }
 
     bool solveNodeLambda(Individual& individual, const Node& node, double lambda) {
+        
+        /** If node.fixedInAssets is prefix of any previous solution for this same lambda it means that
+         * the solver already found the solution for this fixedInAssets constraints.
+        */
+        if(optimalsPerLambdas.count(lambda) && optimalsPerLambdas[lambda].prefixExists(node.fixedInAssets)){
+            return false;
+        }
         try{
             clearFixedConstraints();
             applyFixedConstraints(node);
@@ -566,6 +576,16 @@ public:
                 individual.weights.push_back(wi);
                 individual.picked.push_back(yi > 0.5 ? 1 : 0);
             }
+
+            if(!optimalsPerLambdas.count(lambda)){
+                optimalsPerLambdas[lambda] = Trie();
+            }
+
+            /**
+             * This is a Trie that will save this solution and the prefix will be used futher.
+             */
+            optimalsPerLambdas[lambda].insert(individual.picked);
+
         } catch(GRBException e){
             cout << "Gurobi:" << e.getMessage() << endl;
             exit(1);
@@ -802,9 +822,12 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
 
     const auto time_start = std::chrono::steady_clock::now();
     while(!pq.empty()){
+        
         cout << "UB size " << UB.size() << endl; 
-        cout << "Lambda size" << lambdaList.size() << endl; 
-        cout << "nadir size" << nadirPoints.size() << endl; 
+        if(DEBUG){
+            cout << "Lambda size " << lambdaList.size() << endl; 
+            cout << "nadir size " << nadirPoints.size() << endl; 
+        }
 
         missingNodes--;
         cout << "Missing Nodes: "<< missingNodes << endl;
@@ -825,6 +848,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
 
         
         if(current.selectedCount >= K || current.level == NUMBER_OF_ASSETS){ 
+            cout << "going to next" << endl;
             continue;
         }
 
