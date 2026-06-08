@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "portfolio_data.hpp"
 #include "nsgaii.hpp"
+#include "param.h"
 #include <vector>
 #include <iomanip>
 
@@ -12,14 +13,9 @@ using namespace std;
 
 static int OUTPUT = 2; // 0 - None | 1 - Last Frontier: Risk Return | 2 - Each: Generation,Risk,Return
 
-static constexpr int POP_SIZE = 250;
-static constexpr int GENERATIONS = 400;
-static constexpr double LB = 0.01; //
-static constexpr double UB = 1.0; // 
-static constexpr double K = 10; // max picked assets 
 int NUMBER_OF_ASSETS = 0;
 
-mt19937 rng(2);
+mt19937 rng(1);
 
 using Population = NSGAII_Population;
 using Frontiers = NSGAII_Frontiers; 
@@ -459,7 +455,7 @@ void repair_individual(Individual &individual) {
                 if(individual.weights[i] < 0){
                     cout << "Deu ruim vei"  << endl;
                 }
-                ind.weights[i] = LB  + (ind.weights[i] / sum) * ( 1 - LB * pickedCount);
+                ind.weights[i] = WEIGHT_LOWER_BOUND  + (ind.weights[i] / sum) * ( 1 - WEIGHT_LOWER_BOUND * pickedCount);
             }
         }
     };
@@ -650,7 +646,7 @@ void print_csv_population(Archive archive, int generation){
 Population run_nsgaII(){
     Archive archive = {};
     archive.reserve(POP_SIZE * GENERATIONS);
-    PortfolioData data = PortfolioDataLoader::load_from_file("port1.txt"); 
+    PortfolioData data = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE); 
     NUMBER_OF_ASSETS = data.mean.size();
     portfolioData = data;
     Population population = generate_population(POP_SIZE, data);
@@ -698,8 +694,9 @@ Population run_nsgaII(){
     if (OUTPUT == 1){
         print_population(frontiers[0]);
     } 
-
     add_population_to_archive(archive, frontiers[0]);
+
+
     return archive;
 }
 

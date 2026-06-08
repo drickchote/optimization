@@ -4,6 +4,7 @@
 #include <vector>
 #include <queue>
 #include <string>
+#include <algorithm>
 #include "portfolio_data.hpp"
 #include "nsgaii.hpp"
 #include "gurobi_c++.h"
@@ -11,19 +12,10 @@
 #include <map>
 #include <chrono>
 #include "trie.hpp"
+#include "param.h"
+#include "individual.hpp"
+#include "bounded_pareto_set.cpp"
 
-
-static constexpr double K = 10; // max picked assets 
-static constexpr double weight_lower_bound = 0.01; //
-static constexpr double weight_upper_bound = 1.0; //
-static constexpr double DEBUG = 0;
-
-struct Individual{
-    vector<int> picked; // list of assets weights
-    vector<double> weights; // list of assets weights
-    double expectedReturn; // maximize 
-    double risk; // minimize
-};
 
 struct WeightedBound {
     double lambda;
@@ -37,6 +29,8 @@ using Archive = vector<Individual>;
 using Point = tuple<double, double>;
 
 using namespace std;
+
+static BoundedParetoSet archive_grid;
 
 struct Node {
     int level;                        
@@ -343,32 +337,65 @@ void adjust_nadir_after_removal(Archive &UB, vector <Point>&nadirList, int point
 
 
 void add_to_archive(Archive& UB, const Individual& individual, vector<double> &lambdaList, vector<Point> &nadirPoints) {
+    ASS(assert(archive_grid.check_grid(UB));)
 
-    // if(UB.size() > 5000){ // Temp TODO - Remove
-    //     return;
-    // }
+    std::size_t most_crowded = 0;
+    int highest_position_count = -1;
 
-    for (auto it = UB.begin(); it != UB.end(); ) {
-        if (dominates(individual, *it)) {
-            int pointPosition = it - UB.begin();
-            it = UB.erase(it);  
-            adjust_lambda_after_removal(UB, lambdaList, pointPosition);
-            adjust_nadir_after_removal(UB, nadirPoints, pointPosition);
+    if (!UB.empty()) {
+        highest_position_count = archive_grid.get_position_count(UB.front());
+    }
 
-        } else {
-            ++it;
+    std::vector<std::size_t> to_remove;
+
+    for (std::size_t index = 0; index < UB.size(); ++index) {
+        if (dominates(individual, UB[index])) {
+            to_remove.push_back(index);
+        }
+
+        if (to_remove.empty() && UB.size() + 1 > BoundedParetoSet::MAX_ARCHIVE_SIZE) {
+            const int current_position_count = archive_grid.get_position_count(UB[index]);
+
+            if (highest_position_count < current_position_count) {
+                highest_position_count = current_position_count;
+                most_crowded = index;
+            }
+        }
+
+        if (dominates(UB[index], individual)
+            || (nearly_equal(UB[index].expectedReturn, individual.expectedReturn)
+                && nearly_equal(UB[index].risk, individual.risk))) {
+            return;
         }
     }
 
-    auto it = UB.begin();
-    while(it != UB.end() && it->risk < individual.risk){
-        ++it;
+    if (to_remove.empty() && UB.size() + 1 > BoundedParetoSet::MAX_ARCHIVE_SIZE) {
+        to_remove.push_back(most_crowded);
     }
 
-    int pointPosition = it - UB.begin();
-    UB.insert(it, individual);
+    std::sort(to_remove.begin(), to_remove.end(), std::greater<std::size_t>());
+
+    for (std::size_t index : to_remove) {
+        archive_grid.remove_individual(UB[index]);
+        adjust_lambda_after_removal(UB, lambdaList, static_cast<int>(index));
+        adjust_nadir_after_removal(UB, nadirPoints, static_cast<int>(index));
+        UB.erase(UB.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+
+    auto insert_it = UB.begin();
+    while (insert_it != UB.end() && insert_it->risk < individual.risk) {
+        ++insert_it;
+    }
+
+    const int pointPosition = static_cast<int>(insert_it - UB.begin());
+    UB.insert(insert_it, individual);
     adjust_lambda_after_adding(UB, lambdaList, pointPosition, individual);
+
+    archive_grid.add_individual(individual);
+    archive_grid.finalize_addition(UB);
     adjust_nadir_after_adding(UB, nadirPoints, pointPosition, individual);
+
+    ASS(assert(archive_grid.check_grid(UB));)
 }
 
 
@@ -526,7 +553,7 @@ public:
     
             for (int i = 0; i < NUMBER_OF_ASSETS; i++) {
                 model->addConstr(w[i] <= y[i]);
-                model->addConstr(w[i] >= weight_lower_bound * y[i]);
+                model->addConstr(w[i] >= WEIGHT_LOWER_BOUND * y[i]);
             }
     
             GRBLinExpr sumWeights = 0.0;
@@ -817,6 +844,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
 
     calculate_nadir_points(nadirPoints, UB);
     calculate_lambdas(lambdaList, UB);
+    archive_grid.rebuild(UB);
 
     PortfolioSolver solver;
 
@@ -846,7 +874,8 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
         Node current = pq.top();
         pq.pop();
 
-        
+        cout << "Node level: " << current.level << " | selected count: " << current.selectedCount << endl;
+
         if(current.selectedCount >= K || current.level == NUMBER_OF_ASSETS){ 
             cout << "going to next" << endl;
             continue;
@@ -902,7 +931,7 @@ int main(int argc, char** argv) {
     Archive UB = {};
 
     if (!checkpoint_in.empty()) {
-        portfolioData = PortfolioDataLoader::load_from_file("../inputs/port1.txt");
+        portfolioData = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE);
         NUMBER_OF_ASSETS = portfolioData.n;
     } else {
         convert_nsgaii_population(UB, run_nsgaII());
@@ -912,7 +941,7 @@ int main(int argc, char** argv) {
             }
             return a.expectedReturn > b.expectedReturn;
         });
-        portfolioData = PortfolioDataLoader::load_from_file("../inputs/port1.txt");
+        portfolioData = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE);
         NUMBER_OF_ASSETS = portfolioData.n;
     }
 
