@@ -18,7 +18,7 @@
 #define DEBUG 0
 
 // Input data
-#define PORTFOLIO_FILE "../inputs/port1.txt"
+#define PORTFOLIO_FILE "../inputs/port5.txt"
 
 //#define ASSERT
 #ifdef ASSERT
