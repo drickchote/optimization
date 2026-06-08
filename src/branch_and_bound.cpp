@@ -13,6 +13,7 @@
 #include <chrono>
 #include "trie.hpp"
 #include "param.h"
+#include "export_results.hpp"
 #include "individual.hpp"
 #include "bounded_pareto_set.cpp"
 
@@ -948,5 +949,14 @@ int main(int argc, char** argv) {
     if (branch_and_bound(UB, checkpoint_in, checkpoint_out) < 0.0) {
         return 1;
     }
+
+    export_results_csv(
+        build_results_filepath("BB", PORTFOLIO_FILE, K),
+        PORTFOLIO_FILE,
+        K,
+        "BB",
+        UB
+    );
+
     return 0;
 }

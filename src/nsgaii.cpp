@@ -6,6 +6,7 @@
 #include "portfolio_data.hpp"
 #include "nsgaii.hpp"
 #include "param.h"
+#include "export_results.hpp"
 #include <vector>
 #include <iomanip>
 
@@ -704,6 +705,15 @@ Population run_nsgaII(){
 #ifndef BB
 int main(){
     Population archive = run_nsgaII();
+
+    export_results_csv(
+        build_results_filepath("NSGAII", PORTFOLIO_FILE, K),
+        PORTFOLIO_FILE,
+        K,
+        "NSGAII",
+        archive
+    );
+
     return 0;
 }
 #endif
