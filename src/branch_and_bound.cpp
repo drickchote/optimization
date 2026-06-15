@@ -13,9 +13,12 @@
 #include <chrono>
 #include "trie.hpp"
 #include "param.h"
+#include "experiment_config.hpp"
+#include "experiment_cli.hpp"
 #include "export_results.hpp"
 #include "individual.hpp"
 #include "bounded_pareto_set.cpp"
+#include <boost/multiprecision/cpp_int.hpp>
 
 
 struct WeightedBound {
@@ -30,6 +33,7 @@ using Archive = vector<Individual>;
 using Point = tuple<double, double>;
 
 using namespace std;
+using namespace boost::multiprecision;
 
 static BoundedParetoSet archive_grid;
 
@@ -838,10 +842,11 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
      */
     vector<Point> nadirPoints = {};
     vector<double> lambdaList = {};
+    cout <<"Number of assets: "<< NUMBER_OF_ASSETS << endl;
 
-    unsigned long long numberOfNodes = (1ULL << (NUMBER_OF_ASSETS+1)) - 1;
+    // cpp_int numberOfNodes = (cpp_int(1) << (NUMBER_OF_ASSETS+1)) - 1;
     int treeHeight = NUMBER_OF_ASSETS + 1;
-    unsigned long long missingNodes = numberOfNodes;
+    // cpp_int missingNodes = numberOfNodes;
 
     calculate_nadir_points(nadirPoints, UB);
     calculate_lambdas(lambdaList, UB);
@@ -850,6 +855,7 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
     PortfolioSolver solver;
 
     const auto time_start = std::chrono::steady_clock::now();
+
     while(!pq.empty()){
         
         cout << "UB size " << UB.size() << endl; 
@@ -858,20 +864,25 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
             cout << "nadir size " << nadirPoints.size() << endl; 
         }
 
-        missingNodes--;
-        cout << "Missing Nodes: "<< missingNodes << endl;
+        // missingNodes--;
+        // cout << "Missing Nodes: "<< missingNodes << endl;
         i++; 
-        if(i % 10 == 0){
+        // if(i % 10 == 0){
             const auto elapsed = std::chrono::steady_clock::now() - time_start;
             const double minutes =
                 std::chrono::duration<double>(elapsed).count() / 60.0;
-            cout << "minutes since start: " << fixed << setprecision(2) << minutes << endl;
-            cout << "i value: " << i << endl;
-            cout << "queue size " << pq.size() << endl;
-            if (!checkpoint_out.empty()) {
-                save_checkpoint(checkpoint_out, UB, pq, i);
+
+            if(minutes >= MAX_TIME){
+                cout << "Max time reached, stopping" << endl;
+                break;
             }
-        }
+            // cout << "minutes since start: " << fixed << setprecision(2) << minutes << endl;
+            // cout << "i value: " << i << endl;
+            // cout << "queue size " << pq.size() << endl;
+            // if (!checkpoint_out.empty()) {
+            //     save_checkpoint(checkpoint_out, UB, pq, i);
+            // }
+        // }
         Node current = pq.top();
         pq.pop();
 
@@ -882,27 +893,34 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
             continue;
         }
 
+        cout << "Making with" << endl;
         Node with = make_with(current);
         bound(with, UB, lambdaList,  nadirPoints, solver);
+        cout << "End of Making with" << endl;
         if(!with.prunable){
             pq.push(with);
-        } else {
-            int remotion = (1 << (treeHeight-with.level)) - 1;
-            missingNodes -= remotion;
-            cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
-            cout << "Missing Nodes: " << missingNodes << endl;
-        }
+        } 
+        // else {
+        //     // int remotion = (cpp_int(1) << (treeHeight-with.level)) - 1;
+        //     // missingNodes -= remotion;
+        //     cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
+        //     // cout << "Missing Nodes: " << missingNodes << endl;
+        // }
      
+        cout << " Making without" << endl;
         Node without = make_without(current);
+        
         bound(without, UB, lambdaList, nadirPoints, solver);
+        cout << "End of Making without" << endl;
         if(!without.prunable){
             pq.push(without);
-        } else {
-            int remotion = (1 << (treeHeight-with.level)) - 1;
-            missingNodes -= remotion;
-            cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
-            cout << "Missing Nodes: " << missingNodes << endl;
         }
+        //  else {
+        //     int remotion = (1 << (treeHeight-with.level)) - 1;
+        //     missingNodes -= remotion;
+        //     cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
+        //     cout << "Missing Nodes: " << missingNodes << endl;
+        // }
  
     }
     cout << "finished BB" << endl;
@@ -913,25 +931,20 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
 
 
 int main(int argc, char** argv) {
-    if (argc != 1 && argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " [checkpoint_in checkpoint_out]\n";
-        std::cerr << "  checkpoint_in: file to resume from, or '-' to start from NSGA-II + B&B.\n";
-        std::cerr << "  checkpoint_out: file written every 10000 iterations, or '-' to disable.\n";
-        return 1;
-    }
+    ExperimentOptions options;
 
-    std::string checkpoint_in;
-    std::string checkpoint_out;
-    if (argc == 3) {
-        checkpoint_in = argv[1];
-        checkpoint_out = argv[2];
-        if (checkpoint_in == "-") checkpoint_in.clear();
-        if (checkpoint_out == "-") checkpoint_out.clear();
+    try {
+        options = parse_experiment_cli(argc, argv, true);
+        apply_experiment_options(options);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        print_branch_and_bound_usage(argv[0]);
+        return 1;
     }
 
     Archive UB = {};
 
-    if (!checkpoint_in.empty()) {
+    if (!options.checkpoint_in.empty()) {
         portfolioData = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE);
         NUMBER_OF_ASSETS = portfolioData.n;
     } else {
@@ -942,11 +955,9 @@ int main(int argc, char** argv) {
             }
             return a.expectedReturn > b.expectedReturn;
         });
-        portfolioData = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE);
-        NUMBER_OF_ASSETS = portfolioData.n;
     }
 
-    if (branch_and_bound(UB, checkpoint_in, checkpoint_out) < 0.0) {
+    if (branch_and_bound(UB, options.checkpoint_in, options.checkpoint_out) < 0.0) {
         return 1;
     }
 

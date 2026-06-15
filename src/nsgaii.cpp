@@ -6,9 +6,12 @@
 #include "portfolio_data.hpp"
 #include "nsgaii.hpp"
 #include "param.h"
+#include "experiment_config.hpp"
+#include "experiment_cli.hpp"
 #include "export_results.hpp"
 #include <vector>
 #include <iomanip>
+#include <stdexcept>
 
 using namespace std;
 
@@ -703,7 +706,16 @@ Population run_nsgaII(){
 
 
 #ifndef BB
-int main(){
+int main(int argc, char** argv) {
+    try {
+        ExperimentOptions options = parse_experiment_cli(argc, argv, false);
+        apply_experiment_options(options);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        print_nsgaii_usage(argv[0]);
+        return 1;
+    }
+
     Population archive = run_nsgaII();
 
     export_results_csv(

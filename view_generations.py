@@ -1,10 +1,11 @@
 import csv
 import matplotlib.pyplot as plt
 
-FILE_NAME = "pareto_evolution.csv"
+FILE_NAME = "./runs/nsga/port2_k5.csv"
 
 # Estrutura:
 # data[generation] = [(risk, expectedReturn), ...]
+
 data = {}
 
 with open(FILE_NAME, newline="") as f:
@@ -12,7 +13,7 @@ with open(FILE_NAME, newline="") as f:
     for row in reader:
         gen = int(row["generation"])
         risk = float(row["risk"])
-        variance = risk * risk
+        variance = risk 
         expected_return = float(row["expectedReturn"])
 
         if gen not in data:
@@ -39,10 +40,12 @@ def draw_generation():
     returns = [p[1] for p in points]
 
     ax.plot(risks, returns, marker="o")
-    ax.set_title(f"Pareto Frontier - Generation {gen}")
+    ax.set_title(f"NSGAII - Port 2 |  K = 5")
     ax.set_xlabel("Risk")
     ax.set_ylabel("Expected Return")
     ax.grid(True)
+    ax.ticklabel_format(style='plain', axis='x')
+
 
     fig.canvas.draw()
 

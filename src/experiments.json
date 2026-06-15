@@ -1,0 +1,41 @@
+{
+  "inputs_dir": "../inputs",
+  "portfolios": ["port1", "port2", "port3", "port4", "port5"],
+  "k_values": [10],
+  "algorithms": ["nsgaii", "branch_and_bound"],
+  "build": {
+    "source_dir": ".",
+    "nsgaii_binary": "nsgaii",
+    "branch_and_bound_binary": "branch_and_bound",
+    "common_sources": [
+      "portfolio_data.cpp",
+      "export_results.cpp",
+      "experiment_config.cpp",
+      "experiment_cli.cpp"
+    ],
+    "nsgaii_sources": ["nsgaii.cpp"],
+    "branch_and_bound_sources": [
+      "branch_and_bound.cpp",
+      "nsgaii.cpp"
+    ],
+    "nsgaii_flags": [
+      "-std=c++17",
+      "-I/opt/homebrew/include",
+      "-L/opt/homebrew/lib",
+      "-lpagmo"
+    ],
+    "branch_and_bound_flags": [
+      "-std=c++17",
+      "-DBB",
+      "-I/opt/homebrew/include",
+      "-L/opt/homebrew/lib",
+      "-I/Library/gurobi1203/macos_universal2/include",
+      "-L/Library/gurobi1203/macos_universal2/lib",
+      "-lgurobi_c++",
+      "-lgurobi120",
+      "-lm",
+      "-lpthread",
+      "-lpagmo"
+    ]
+  }
+}

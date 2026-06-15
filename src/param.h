@@ -10,16 +10,12 @@
 #define GENERATIONS 400
 
 // Portfolio problem
-#define K 10
 #define WEIGHT_LOWER_BOUND 0.01
 #define WEIGHT_UPPER_BOUND 1.0
 
 // Branch and bound
 #define DEBUG 0
-
-// Input data
-#define PORTFOLIO_FILE "../inputs/port5.txt"
-
+#define MAX_TIME 60
 //#define ASSERT
 #ifdef ASSERT
 #define ASS(x) x
