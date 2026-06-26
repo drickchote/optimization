@@ -5,7 +5,7 @@
 
 class BoundedParetoSet : public ParetoSet {
 public:
-    static constexpr int MAX_ARCHIVE_SIZE = 300;
+    static constexpr int MAX_ARCHIVE_SIZE = 5000;
 };
 
 #endif

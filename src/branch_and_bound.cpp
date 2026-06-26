@@ -618,9 +618,23 @@ public:
              */
             optimalsPerLambdas[lambda].insert(individual.picked);
 
-        } catch(GRBException e){
-            cout << "Gurobi:" << e.getMessage() << endl;
-            exit(1);
+        } catch (const GRBException& e) {
+            std::cerr << "\n[Gurobi error]\n"
+                      << "code: " << e.getErrorCode() << "\n"
+                      << "message: " << e.getMessage() << "\n"
+                      << "lambda: " << std::setprecision(17) << lambda << "\n"
+                      << "node.level: " << node.level << "\n"
+                      << "node.selectedCount: " << node.selectedCount << "\n"
+                      << "fixedInAssets: ";
+        
+            for (int v : node.fixedInAssets) {
+                std::cerr << v;
+            }
+        
+            std::cerr << "\n";
+            model->write("gurobi_failed_model.lp");
+            model->write("gurobi_failed_model.mps");
+            throw;
         }
 
 
@@ -820,19 +834,11 @@ static void save_checkpoint(const std::string& path, const Archive& UB, const st
     for (const Node& node : nodes) write_node(out, node);
 }
 
-double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std::string& checkpoint_out){
+double branch_and_bound(Archive &UB){
     priority_queue<Node> pq;
-    int i = 0;
 
-    if (!checkpoint_in.empty()) {
-        if (!load_checkpoint(checkpoint_in, UB, pq, i)) {
-            std::cerr << "Aborting: checkpoint load failed.\n";
-            return -1.0;
-        }
-    } else {
-        Node root = make_root_node(NUMBER_OF_ASSETS);
-        pq.push(root);
-    }
+    Node root = make_root_node(NUMBER_OF_ASSETS);
+    pq.push(root);
 
     /**
      * UB< is the set of points in the object space that is not dominated by any point in UB. 
@@ -864,25 +870,15 @@ double branch_and_bound(Archive &UB, const std::string& checkpoint_in, const std
             cout << "nadir size " << nadirPoints.size() << endl; 
         }
 
-        // missingNodes--;
-        // cout << "Missing Nodes: "<< missingNodes << endl;
-        i++; 
-        // if(i % 10 == 0){
-            const auto elapsed = std::chrono::steady_clock::now() - time_start;
-            const double minutes =
-                std::chrono::duration<double>(elapsed).count() / 60.0;
+        const auto elapsed = std::chrono::steady_clock::now() - time_start;
+        const double minutes =
+            std::chrono::duration<double>(elapsed).count() / 60.0;
 
-            if(minutes >= MAX_TIME){
-                cout << "Max time reached, stopping" << endl;
-                break;
-            }
-            // cout << "minutes since start: " << fixed << setprecision(2) << minutes << endl;
-            // cout << "i value: " << i << endl;
-            // cout << "queue size " << pq.size() << endl;
-            // if (!checkpoint_out.empty()) {
-            //     save_checkpoint(checkpoint_out, UB, pq, i);
-            // }
-        // }
+        if(minutes >= MAX_TIME){
+            cout << "Max time reached, stopping" << endl;
+            break;
+        }
+  
         Node current = pq.top();
         pq.pop();
 
@@ -942,32 +938,47 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    Archive UB = {};
 
-    if (!options.checkpoint_in.empty()) {
-        portfolioData = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE);
-        NUMBER_OF_ASSETS = portfolioData.n;
-    } else {
-        convert_nsgaii_population(UB, run_nsgaII());
-        sort(UB.begin(), UB.end(), [](Individual a, Individual b) {
-            if (a.risk != b.risk) {
-                return a.risk < b.risk;
-            }
-            return a.expectedReturn > b.expectedReturn;
-        });
-    }
+    Archive nsga_result = {};
 
-    if (branch_and_bound(UB, options.checkpoint_in, options.checkpoint_out) < 0.0) {
+    nsga_result = run_nsgaII();
+    sort(nsga_result.begin(), nsga_result.end(), [](Individual a, Individual b) {
+        if (a.risk != b.risk) {
+            return a.risk < b.risk;
+        }
+        return a.expectedReturn > b.expectedReturn;
+    });
+
+    Archive UB_with_nsga = nsga_result;
+    Archive UB_with_2_points = {nsga_result.front(), nsga_result.back()};
+
+    if (branch_and_bound(UB_with_nsga) < 0.0) {
         return 1;
     }
 
+    export_results_csv(
+        build_results_filepath("BB+NSGAII", PORTFOLIO_FILE, K),
+        PORTFOLIO_FILE,
+        K,
+        "BB",
+        UB_with_nsga
+    );
+
+    // Free UB_with_nsga memory
+    Archive().swap(UB_with_nsga);
+
+    
+    if (branch_and_bound(UB_with_2_points) < 0.0) {
+        return 1;
+    }
     export_results_csv(
         build_results_filepath("BB", PORTFOLIO_FILE, K),
         PORTFOLIO_FILE,
         K,
         "BB",
-        UB
+        UB_with_2_points
     );
+
 
     return 0;
 }

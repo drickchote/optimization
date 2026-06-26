@@ -1,4 +1,6 @@
 #include <list>
+#include <vector>
+#include "individual.hpp"
 
 using namespace std;
 
@@ -20,6 +22,6 @@ inline bool nearly_equal(double a, double b, double eps = 1e-12) {
     return fabs(a - b) <= eps;
 }
 
-NSGAII_Population run_nsgaII();
+std::vector<Individual> run_nsgaII();
 
 extern int NUMBER_OF_ASSETS;

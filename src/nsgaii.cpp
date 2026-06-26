@@ -9,9 +9,12 @@
 #include "experiment_config.hpp"
 #include "experiment_cli.hpp"
 #include "export_results.hpp"
+#include "individual.hpp"
+#include "bounded_pareto_set.cpp"
 #include <vector>
 #include <iomanip>
 #include <stdexcept>
+#include <cassert>
 
 using namespace std;
 
@@ -22,9 +25,20 @@ int NUMBER_OF_ASSETS = 0;
 mt19937 rng(1);
 
 using Population = NSGAII_Population;
-using Frontiers = NSGAII_Frontiers; 
-using Individual = NSGAII_Individual;
+using Frontiers = NSGAII_Frontiers;
+using NsgaIndividual = NSGAII_Individual;
 using Archive = vector<Individual>;
+
+static BoundedParetoSet archive_grid;
+
+static Individual to_archive_individual(const NsgaIndividual& ind) {
+    Individual out{};
+    out.expectedReturn = ind.expectedReturn;
+    out.risk = ind.risk;
+    out.picked = ind.picked;
+    out.weights = ind.weights;
+    return out;
+}
 
 
 static inline int randi(mt19937& rng, int lo, int hi_inclusive) {
@@ -43,7 +57,7 @@ static inline double clamp01(double x) {
     return x;
 }
 
-void print_individual(Individual individual){
+void print_individual(NsgaIndividual individual){
     if(OUTPUT){
         cout << setprecision(17) << individual.risk << " " << individual.expectedReturn;
     }
@@ -82,7 +96,7 @@ void print_pareto(Frontiers frontiers, Population population){
 }
 
 
-double calculate_expected_return(const Individual& ind, const PortfolioData& data) {
+double calculate_expected_return(const NsgaIndividual& ind, const PortfolioData& data) {
     const int N = data.n;
     double er = 0.0;
 
@@ -93,7 +107,7 @@ double calculate_expected_return(const Individual& ind, const PortfolioData& dat
     return er;
 }
 
-double calculate_risk(const Individual& ind, const PortfolioData& data) {
+double calculate_risk(const NsgaIndividual& ind, const PortfolioData& data) {
     const int N = data.n;
     double variance = 0.0;
 
@@ -119,14 +133,14 @@ double calculate_risk(const Individual& ind, const PortfolioData& data) {
     return variance;
 }
 
-static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) {
+static int tournament_select_index(const vector<NsgaIndividual>& pop, mt19937& rng) {
     const int n = (int)pop.size();
     int a = randi(rng, 0, n - 1);
     int b = randi(rng, 0, n - 1);
     while (b == a && n > 1) b = randi(rng, 0, n - 1);
 
-    const Individual& A = pop[a];
-    const Individual& B = pop[b];
+    const NsgaIndividual& A = pop[a];
+    const NsgaIndividual& B = pop[b];
 
     if (A.rank < B.rank) return a;
     if (B.rank < A.rank) return b;
@@ -140,13 +154,13 @@ static int tournament_select_index(const vector<Individual>& pop, mt19937& rng) 
 }
 
 /** Crossover operation based on (streichert, 2004b) */
-Population crossover(Individual individual1, Individual individual2) {
+Population crossover(NsgaIndividual individual1, NsgaIndividual individual2) {
     Population children;
     children.reserve(2);
 
     const double alpha = 0.5; // BLX-α 
 
-    Individual child1, child2;
+    NsgaIndividual child1, child2;
     child1.picked.resize(NUMBER_OF_ASSETS, 0);
     child2.picked.resize(NUMBER_OF_ASSETS, 0);
     child1.weights.resize(NUMBER_OF_ASSETS, 0.0);
@@ -190,7 +204,7 @@ Population crossover(Individual individual1, Individual individual2) {
 }
 
 /** Mutation based on (streichert, 2004b)  */
-void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, double sigma = 0.05) {
+void mutate(NsgaIndividual& individual, double pm_bits = 0.1, double pm_real = 1.0, double sigma = 0.05) {
     // --- Bit-string one-point mutation (flip 1 gene) ---
     if (!individual.picked.empty() && rand01(rng) <= pm_bits) {
         int idx = randi(rng, 0, (int)individual.picked.size() - 1);
@@ -213,7 +227,8 @@ void mutate(Individual& individual, double pm_bits = 0.1, double pm_real = 1.0, 
 
 
 
-bool dominates(const Individual& a, const Individual& b){
+template<typename T>
+bool dominates(const T& a, const T& b){
     const bool betterReturn =
         (a.expectedReturn > b.expectedReturn) &&
         !nearly_equal(a.expectedReturn, b.expectedReturn);
@@ -256,8 +271,8 @@ void evaluate(Population& population){
     }
 }
 
-Individual generate_decision(int size, mt19937& rng) {
-    Individual individual;
+NsgaIndividual generate_decision(int size, mt19937& rng) {
+    NsgaIndividual individual;
 
 
     uniform_int_distribution<int> binaryDist(0, 1);
@@ -340,9 +355,9 @@ Frontiers non_dominant_sort(Population& population){
     return fronts;
 }
 
-void sort_population(vector<Individual> &population){ // sort by dominance, then crowding distance
+void sort_population(vector<NsgaIndividual> &population){ // sort by dominance, then crowding distance
     sort(population.begin(), population.end(),
-        [](const Individual& a, const Individual& b){
+        [](const NsgaIndividual& a, const NsgaIndividual& b){
             // 1) Dominations has priority
             if (a.rank < b.rank) return true;   // a comes before b
             if (b.rank < a.rank) return false;  // b comes before a
@@ -373,8 +388,8 @@ void sort_population(vector<Individual> &population){ // sort by dominance, then
  *
  * This version is Lamarckian (it changes genotype: picked + weights).
  */
-void repair_individual(Individual &individual) {
-    auto ensure_at_least_one_picked = [&](Individual& ind) {
+void repair_individual(NsgaIndividual &individual) {
+    auto ensure_at_least_one_picked = [&](NsgaIndividual& ind) {
         int pickedCount = 0;
         for (int i = 0; i < NUMBER_OF_ASSETS; ++i) pickedCount += (ind.picked[i] != 0); 
         if (pickedCount > 0) return;
@@ -388,7 +403,7 @@ void repair_individual(Individual &individual) {
         ind.weights[best] = 1.0;
     };
 
-    auto apply_cardinality_keep_k_largest = [&](Individual& ind) {
+    auto apply_cardinality_keep_k_largest = [&](NsgaIndividual& ind) {
         // First enforce consistency: if not picked -> weight 0; if picked -> clamp to [0,1]
         for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
             ind.picked[i] = (ind.picked[i] != 0) ? 1 : 0;
@@ -425,7 +440,7 @@ void repair_individual(Individual &individual) {
         }
     };
 
-    auto normalize = [&](Individual& ind) {
+    auto normalize = [&](NsgaIndividual& ind) {
         double sum = 0.0;
         for (int i = 0; i < NUMBER_OF_ASSETS; ++i) {
             if (ind.picked[i] == 0){
@@ -563,34 +578,65 @@ void calculate_crowding_distance(Frontiers& frontiers) {
 
 
 
-bool dominated_or_existing_solution(Archive& archive, const Individual& ind){
-    for (const auto& ub : archive){
-        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn) && nearly_equal(ub.risk, ind.risk))){
-            return true;
+void add_to_archive(Archive& archive, const Individual& individual) {
+    ASS(assert(archive_grid.check_grid(archive));)
+
+    std::size_t most_crowded = 0;
+    int highest_position_count = -1;
+
+    if (!archive.empty()) {
+        highest_position_count = archive_grid.get_position_count(archive.front());
+    }
+
+    std::vector<std::size_t> to_remove;
+
+    for (std::size_t index = 0; index < archive.size(); ++index) {
+        if (dominates(individual, archive[index])) {
+            to_remove.push_back(index);
+        }
+
+        if (to_remove.empty() && archive.size() + 1 > BoundedParetoSet::MAX_ARCHIVE_SIZE) {
+            const int current_position_count = archive_grid.get_position_count(archive[index]);
+
+            if (highest_position_count < current_position_count) {
+                highest_position_count = current_position_count;
+                most_crowded = index;
+            }
+        }
+
+        if (dominates(archive[index], individual)
+            || (nearly_equal(archive[index].expectedReturn, individual.expectedReturn)
+                && nearly_equal(archive[index].risk, individual.risk))) {
+            return;
         }
     }
-    return false;
-}
 
-
-void add_to_archive(Archive& archive, Individual& individual){
-    if(dominated_or_existing_solution(archive, individual)){
-        return;
+    if (to_remove.empty() && archive.size() + 1 > BoundedParetoSet::MAX_ARCHIVE_SIZE) {
+        to_remove.push_back(most_crowded);
     }
 
-    for (auto it = archive.begin(); it != archive.end(); ) {
-        if (dominates(individual, *it)) {
-            it = archive.erase(it);  
-        } else {
-            ++it;
-        }
+    std::sort(to_remove.begin(), to_remove.end(), std::greater<std::size_t>());
+
+    for (std::size_t index : to_remove) {
+        archive_grid.remove_individual(archive[index]);
+        archive.erase(archive.begin() + static_cast<std::ptrdiff_t>(index));
     }
-    archive.push_back(individual);
+
+    auto insert_it = archive.begin();
+    while (insert_it != archive.end() && insert_it->risk < individual.risk) {
+        ++insert_it;
+    }
+
+    archive.insert(insert_it, individual);
+    archive_grid.add_individual(individual);
+    archive_grid.finalize_addition(archive);
+
+    ASS(assert(archive_grid.check_grid(archive));)
 }
 
 void add_population_to_archive(Archive& archive, Population& population){
-    for(auto individual : population){
-        add_to_archive(archive, individual);
+    for (const auto& individual : population) {
+        add_to_archive(archive, to_archive_individual(individual));
     }
 }
 
@@ -600,7 +646,7 @@ Population generate_population(int size, PortfolioData data){
     population.reserve(POP_SIZE);
 
     for(int i=0; i<size; i++){
-        Individual individual = generate_decision(NUMBER_OF_ASSETS, rng);
+        NsgaIndividual individual = generate_decision(NUMBER_OF_ASSETS, rng);
         repair_individual(individual);
         individual.expectedReturn = calculate_expected_return(individual, data);
         individual.risk = calculate_risk(individual, data);
@@ -639,17 +685,18 @@ Population generate_population(Population population, PortfolioData data){
     return offspring;
 }
 
-void print_csv_population(Archive archive, int generation){
-    for(auto i : archive){
+void print_csv_archive(const Archive& archive, int generation){
+    for (const auto& i : archive) {
         cout << generation << "," << setprecision(17) << i.risk << "," << i.expectedReturn << endl;
     }
 }
 
 
 
-Population run_nsgaII(){
+Archive run_nsgaII(){
     Archive archive = {};
-    archive.reserve(POP_SIZE * GENERATIONS);
+    archive.reserve(BoundedParetoSet::MAX_ARCHIVE_SIZE);
+    archive_grid.rebuild(archive);
     PortfolioData data = PortfolioDataLoader::load_from_file(PORTFOLIO_FILE); 
     NUMBER_OF_ASSETS = data.mean.size();
     portfolioData = data;
@@ -687,19 +734,19 @@ Population run_nsgaII(){
         population.insert(population.end(), nextGeneration.begin(), nextGeneration.end());
         population.insert(population.end(), offspring.begin(), offspring.end());
 
-        frontiers = non_dominant_sort(population); 
-        // add_population_to_archive(archive, frontiers[0]);
+        frontiers = non_dominant_sort(population);
+        add_population_to_archive(archive, frontiers[0]);
 
         if(OUTPUT == 2){
-            print_csv_population(frontiers[0], i+1);
+            print_csv_archive(archive, i + 1);
         }
     }
 
     if (OUTPUT == 1){
-        print_population(frontiers[0]);
-    } 
-    add_population_to_archive(archive, frontiers[0]);
-
+        for (const Individual& ind : archive) {
+            cout << setprecision(17) << ind.risk << " " << ind.expectedReturn << endl;
+        }
+    }
 
     return archive;
 }
@@ -716,7 +763,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    Population archive = run_nsgaII();
+    Archive archive = run_nsgaII();
 
     export_results_csv(
         build_results_filepath("NSGAII", PORTFOLIO_FILE, K),
