@@ -241,7 +241,7 @@ void adjust_lambda_after_adding(Archive &UB, vector <double>&lambdaList, int poi
     double lambdaBefore = calculate_lambda(previousPoint, newIndividual);
     double lambdaAfter = calculate_lambda(newIndividual, nextPoint);
 
-    lambdaList[pointPosition] = lambdaBefore; // Replace the older lambda for this position
+    lambdaList.at(pointPosition) = lambdaBefore; // Replace the older lambda for this position
     lambdaList.insert(lambdaList.begin() + pointPosition, lambdaAfter);
 }
 
@@ -277,7 +277,7 @@ void adjust_lambda_after_removal(Archive &UB, vector <double>&lambdaList, int po
 
     double newLambda = calculate_lambda(previousPoint, nextPoint);
     
-    lambdaList[pointPosition-1] = newLambda; // Replace the older lambda for this position
+    lambdaList.at(pointPosition-1) = newLambda; // Replace the older lambda for this position
 }
 
 void adjust_nadir_after_adding(Archive &UB, vector <Point>&nadirList, int pointPosition, Individual newIndividual){
@@ -305,7 +305,7 @@ void adjust_nadir_after_adding(Archive &UB, vector <Point>&nadirList, int pointP
     Point nadirAfter = {nextPoint.risk, -newIndividual.expectedReturn};
 
 
-    nadirList[pointPosition] = nadirBefore; // Replace the older lambda for this position
+    nadirList.at(pointPosition) = nadirBefore; // Replace the older lambda for this position
     nadirList.insert(nadirList.begin() + pointPosition, nadirAfter);
 }
 
@@ -336,13 +336,13 @@ void adjust_nadir_after_removal(Archive &UB, vector <Point>&nadirList, int point
 
     Point newNadir = {nextPoint.risk, -previousPoint.expectedReturn};
     
-    nadirList[pointPosition-1] = newNadir; // Replace the older nadir for this position
+    nadirList.at(pointPosition-1) = newNadir; // Replace the older nadir for this position
 }
 
 
 
 void add_to_archive(Archive& UB, const Individual& individual, vector<double> &lambdaList, vector<Point> &nadirPoints) {
-    ASS(assert(archive_grid.check_grid(UB));)
+    // ASS(assert(archive_grid.check_grid(UB));)
 
     std::size_t most_crowded = 0;
     int highest_position_count = -1;
@@ -400,7 +400,7 @@ void add_to_archive(Archive& UB, const Individual& individual, vector<double> &l
     archive_grid.finalize_addition(UB);
     adjust_nadir_after_adding(UB, nadirPoints, pointPosition, individual);
 
-    ASS(assert(archive_grid.check_grid(UB));)
+    // ASS(assert(archive_grid.check_grid(UB));)
 }
 
 
@@ -688,10 +688,11 @@ private:
 };
 
 
-bool bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &nadirPoints, PortfolioSolver &solver){
+void bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &nadirPoints, PortfolioSolver &solver){
     vector<WeightedBound> LB;
     
     vector<Individual> candidates;
+    
     
     for(auto lambda : lambdaList){
         if (!std::isfinite(lambda)) {

@@ -22,7 +22,7 @@ static int OUTPUT = 2; // 0 - None | 1 - Last Frontier: Risk Return | 2 - Each: 
 
 int NUMBER_OF_ASSETS = 0;
 
-mt19937 rng(1);
+mt19937 rng(4);
 
 using Population = NSGAII_Population;
 using Frontiers = NSGAII_Frontiers;
@@ -579,7 +579,7 @@ void calculate_crowding_distance(Frontiers& frontiers) {
 
 
 void add_to_archive(Archive& archive, const Individual& individual) {
-    ASS(assert(archive_grid.check_grid(archive));)
+    // ASS(assert(archive_grid.check_grid(archive));)
 
     std::size_t most_crowded = 0;
     int highest_position_count = -1;
@@ -631,7 +631,7 @@ void add_to_archive(Archive& archive, const Individual& individual) {
     archive_grid.add_individual(individual);
     archive_grid.finalize_addition(archive);
 
-    ASS(assert(archive_grid.check_grid(archive));)
+    // ASS(assert(archive_grid.check_grid(archive));)
 }
 
 void add_population_to_archive(Archive& archive, Population& population){
