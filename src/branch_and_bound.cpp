@@ -241,7 +241,8 @@ void adjust_lambda_after_adding(Archive &UB, vector <double>&lambdaList, int poi
     double lambdaBefore = calculate_lambda(previousPoint, newIndividual);
     double lambdaAfter = calculate_lambda(newIndividual, nextPoint);
 
-    lambdaList.at(pointPosition) = lambdaBefore; // Replace the older lambda for this position
+    
+    lambdaList.at(pointPosition-1) = lambdaBefore; // Replace the older lambda for this position
     lambdaList.insert(lambdaList.begin() + pointPosition, lambdaAfter);
 }
 
@@ -251,7 +252,6 @@ void adjust_lambda_after_adding(Archive &UB, vector <double>&lambdaList, int poi
  * 
  */
 void adjust_lambda_after_removal(Archive &UB, vector <double>&lambdaList, int pointPosition){
-
     if (UB.empty()) {
         lambdaList.clear();
         return;
@@ -281,7 +281,6 @@ void adjust_lambda_after_removal(Archive &UB, vector <double>&lambdaList, int po
 }
 
 void adjust_nadir_after_adding(Archive &UB, vector <Point>&nadirList, int pointPosition, Individual newIndividual){
-
     if (UB.size() <= 1) {
         nadirList.clear();
         return;
@@ -304,8 +303,9 @@ void adjust_nadir_after_adding(Archive &UB, vector <Point>&nadirList, int pointP
     Point nadirBefore = {newIndividual.risk, -previousPoint.expectedReturn};
     Point nadirAfter = {nextPoint.risk, -newIndividual.expectedReturn};
 
+   
+    nadirList.at(pointPosition-1) = nadirBefore; // Replacing the older nadir for this position
 
-    nadirList.at(pointPosition) = nadirBefore; // Replace the older lambda for this position
     nadirList.insert(nadirList.begin() + pointPosition, nadirAfter);
 }
 
@@ -335,7 +335,7 @@ void adjust_nadir_after_removal(Archive &UB, vector <Point>&nadirList, int point
     auto nextPoint = UB[pointPosition]; // The next point has the same position as the individual that was removed
 
     Point newNadir = {nextPoint.risk, -previousPoint.expectedReturn};
-    
+
     nadirList.at(pointPosition-1) = newNadir; // Replace the older nadir for this position
 }
 
@@ -377,9 +377,7 @@ void add_to_archive(Archive& UB, const Individual& individual, vector<double> &l
     if (to_remove.empty() && UB.size() + 1 > BoundedParetoSet::MAX_ARCHIVE_SIZE) {
         to_remove.push_back(most_crowded);
     }
-
     std::sort(to_remove.begin(), to_remove.end(), std::greater<std::size_t>());
-
     for (std::size_t index : to_remove) {
         archive_grid.remove_individual(UB[index]);
         adjust_lambda_after_removal(UB, lambdaList, static_cast<int>(index));
@@ -395,10 +393,13 @@ void add_to_archive(Archive& UB, const Individual& individual, vector<double> &l
     const int pointPosition = static_cast<int>(insert_it - UB.begin());
     UB.insert(insert_it, individual);
     adjust_lambda_after_adding(UB, lambdaList, pointPosition, individual);
-
+    
+    
     archive_grid.add_individual(individual);
     archive_grid.finalize_addition(UB);
+    // cout << "adjusting nadir after adding 123" << endl;
     adjust_nadir_after_adding(UB, nadirPoints, pointPosition, individual);
+    // cout << "adjusting nadir after adding 123" << endl;
 
     // ASS(assert(archive_grid.check_grid(UB));)
 }
@@ -696,7 +697,6 @@ void bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &
     
     for(auto lambda : lambdaList){
         if (!std::isfinite(lambda)) {
-            cout << "Invalid lambda before solve: " << lambda << endl;
             exit(1);
         }
         Individual individual = {};
@@ -865,8 +865,8 @@ double branch_and_bound(Archive &UB){
 
     while(!pq.empty()){
         
-        cout << "UB size " << UB.size() << endl; 
         if(DEBUG){
+            cout << "UB size " << UB.size() << endl; 
             cout << "Lambda size " << lambdaList.size() << endl; 
             cout << "nadir size " << nadirPoints.size() << endl; 
         }
@@ -890,34 +890,20 @@ double branch_and_bound(Archive &UB){
             continue;
         }
 
-        cout << "Making with" << endl;
         Node with = make_with(current);
         bound(with, UB, lambdaList,  nadirPoints, solver);
-        cout << "End of Making with" << endl;
         if(!with.prunable){
             pq.push(with);
         } 
-        // else {
-        //     // int remotion = (cpp_int(1) << (treeHeight-with.level)) - 1;
-        //     // missingNodes -= remotion;
-        //     cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
-        //     // cout << "Missing Nodes: " << missingNodes << endl;
-        // }
+  
      
-        cout << " Making without" << endl;
         Node without = make_without(current);
         
         bound(without, UB, lambdaList, nadirPoints, solver);
-        cout << "End of Making without" << endl;
         if(!without.prunable){
             pq.push(without);
         }
-        //  else {
-        //     int remotion = (1 << (treeHeight-with.level)) - 1;
-        //     missingNodes -= remotion;
-        //     cout << "A node in the level "<< with.level << " was pruned. It removed " << remotion << " nodes" << endl;
-        //     cout << "Missing Nodes: " << missingNodes << endl;
-        // }
+     
  
     }
     cout << "finished BB" << endl;
