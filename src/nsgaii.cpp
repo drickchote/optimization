@@ -22,7 +22,7 @@ static int OUTPUT = 2; // 0 - None | 1 - Last Frontier: Risk Return | 2 - Each: 
 
 int NUMBER_OF_ASSETS = 0;
 
-mt19937 rng(4);
+mt19937 rng(7);
 
 using Population = NSGAII_Population;
 using Frontiers = NSGAII_Frontiers;

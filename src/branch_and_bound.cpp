@@ -26,7 +26,6 @@ struct WeightedBound {
     double lbValue;
     Individual individual;
 };
-int shit_solutions = 0;
 
 
 using Archive = vector<Individual>;
@@ -51,6 +50,12 @@ struct Node {
     bool operator<(const Node& other) const {
         return priority > other.priority;
     }
+};
+
+struct NodeIdealPoint {
+    Individual minimumRisk;
+    Individual maximumReturn;
+    bool valid;
 };
 
 double calculate_expected_return(const Individual& ind) {
@@ -444,16 +449,10 @@ void convert_nsgaii_population(Archive &UB, NSGAII_Population population){
     }
 }
 
-bool dominated_or_existing_solution(Archive& archive, const Individual& ind){
+bool dominated_or_existing_solution(const Archive& archive, const Individual& ind){
     for (const auto& ub : archive){
-        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn))){
-            if(nearly_equal(ub.risk, ind.risk)){
-                // cout << "same shit solution: ";
-                shit_solutions++;
-                // cout << setprecision(16) << ind.risk<< " " << ind.expectedReturn << " times:" << shit_solutions << endl;;
-            }
+        if (dominates(ub, ind) || (nearly_equal(ub.expectedReturn, ind.expectedReturn) && nearly_equal(ub.risk, ind.risk))){
             return true;
-
         }
     }
     return false;
@@ -688,32 +687,70 @@ private:
     }
 };
 
+NodeIdealPoint calculate_node_ideal(
+    const Node& node,
+    PortfolioSolver& solver
+) {
+    Individual minRiskSolution{};
+    Individual maxReturnSolution{};
+
+    const bool foundMinRisk =
+        solver.solveNodeLambda(minRiskSolution, node, 1.0);
+
+    const bool foundMaxReturn =
+        solver.solveNodeLambda(maxReturnSolution, node, 0.0);
+
+    return {
+        .minimumRisk = minRiskSolution,
+        .maximumReturn = maxReturnSolution,
+        .valid = foundMinRisk && foundMaxReturn
+    };
+}
+
 
 void bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &nadirPoints, PortfolioSolver &solver){
     vector<WeightedBound> LB;
     
     vector<Individual> candidates;
-    
-    
-    for(auto lambda : lambdaList){
-        if (!std::isfinite(lambda)) {
-            exit(1);
-        }
-        Individual individual = {};
-        bool found = false;
-        try {
-            found = solver.solveNodeLambda(individual, node, lambda);
-        } catch(GRBException e){
-            cout << e.getMessage() << endl;
-            exit(1);
-        }
-    
-        if(!found) continue;
-        double lbValue = lambda * individual.risk - (1 - lambda) * individual.expectedReturn;
-        LB.push_back(WeightedBound({lambda, lbValue, individual}));
 
-        candidates.push_back(individual);
+    NodeIdealPoint idealPoint = calculate_node_ideal(node, solver);
+
+    if(idealPoint.valid){
+        candidates.push_back(idealPoint.maximumReturn);
+        candidates.push_back(idealPoint.minimumRisk);
     }
+
+    Individual idealIndividual = {};
+    idealIndividual.risk= idealPoint.minimumRisk.risk;
+    idealIndividual.expectedReturn = idealPoint.maximumReturn.expectedReturn;
+    
+    bool isIdealDominated = idealPoint.valid && dominated_or_existing_solution(UB, idealIndividual);
+ 
+    if(isIdealDominated){
+        cout << "Ideal already is dominated this node can't improve" << endl;
+        node.prunable = true;
+    } else {
+        for(auto lambda : lambdaList){
+            if (!std::isfinite(lambda)) {
+                exit(1);
+            }
+            Individual individual = {};
+            bool found = false;
+            try {
+                found = solver.solveNodeLambda(individual, node, lambda);
+            } catch(GRBException e){
+                cout << e.getMessage() << endl;
+                exit(1);
+            }
+        
+            if(!found) continue;
+            double lbValue = lambda * individual.risk - (1 - lambda) * individual.expectedReturn;
+            LB.push_back(WeightedBound({lambda, lbValue, individual}));
+    
+            candidates.push_back(individual);
+        }
+    }
+
 
     for(auto individual : candidates){
         if(!dominated_or_existing_solution(UB, individual)){
@@ -721,7 +758,7 @@ void bound(Node &node, Archive& UB,  vector<double> &lambdaList, vector<Point> &
         } 
     }
 
-    node.prunable = test_pruning(LB, nadirPoints);
+    node.prunable = isIdealDominated || test_pruning(LB, nadirPoints);
 }
 
 static constexpr const char* CKPT_MAGIC = "BB_CKPT_V1";
